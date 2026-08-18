@@ -1,0 +1,72 @@
+"""Claude Code SDK（claude-agent-sdk）封装：文件操作型 harness 节点统一入口。
+
+SDK 以子进程方式拉起 claude CLI，自动继承本机环境
+（ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN -> 智谱网关）。
+"""
+import asyncio
+import shutil
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .config import get_settings
+
+
+class HarnessError(RuntimeError):
+    pass
+
+
+@dataclass
+class HarnessTask:
+    prompt: str
+    cwd: Path
+    expected_outputs: list[Path]
+    max_turns: int = 0            # 0 -> 使用 settings.harness_max_turns
+
+
+async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
+    from claude_agent_sdk import ClaudeAgentOptions, query
+
+    options = ClaudeAgentOptions(
+        cwd=str(cwd),
+        max_turns=max_turns,
+        permission_mode="bypassPermissions",   # POC 本机受控工作区
+    )
+    final = ""
+    async for msg in query(prompt=prompt, options=options):
+        if getattr(msg, "type", "") == "result":
+            final = getattr(msg, "result", "") or ""
+    return final
+
+
+def _missing_outputs(paths: list[Path]) -> list[Path]:
+    return [p for p in paths if not p.exists() or p.stat().st_size == 0]
+
+
+def run_harness_task(task: HarnessTask) -> list[Path]:
+    """执行任务；产物缺失 -> 带反馈重试一次 -> 仍缺失则抛 HarnessError。"""
+    max_turns = task.max_turns or get_settings().harness_max_turns
+    first = asyncio.run(_query_sdk(task.prompt, task.cwd, max_turns))
+    missing = _missing_outputs(task.expected_outputs)
+    if missing:
+        retry = (
+            task.prompt
+            + "\n\n【重试提示】上次运行未产出以下文件，请务必产出：\n"
+            + "\n".join(str(p) for p in missing)
+            + f"\n\n上次运行最终输出（截断）：\n{first[-2000:]}"
+        )
+        asyncio.run(_query_sdk(retry, task.cwd, max_turns))
+        missing = _missing_outputs(task.expected_outputs)
+    if missing:
+        raise HarnessError("harness 未产出: " + ", ".join(str(p) for p in missing))
+    return list(task.expected_outputs)
+
+
+def prepare_workspace(run_dir: Path, stage_subdir: str,
+                      inputs: list[tuple[Path, str]] | None = None) -> Path:
+    ws = run_dir / stage_subdir
+    ws.mkdir(parents=True, exist_ok=True)
+    for src, name in inputs or []:
+        target = ws / name
+        if not target.exists():
+            shutil.copyfile(src, target)
+    return ws
