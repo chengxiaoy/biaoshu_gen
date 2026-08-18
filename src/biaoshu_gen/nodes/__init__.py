@@ -26,6 +26,9 @@ DEFAULT_NODES: dict[str, NodeFn] = {n: _stub(n) for n in NODE_NAMES}
 from .parse_tender import parse_tender_node          # noqa: E402
 DEFAULT_NODES["parse_tender"] = parse_tender_node
 
+from .extract_template import extract_template_node  # noqa: E402
+DEFAULT_NODES["extract_template"] = extract_template_node
+
 
 def get_nodes(overrides: dict[str, NodeFn] | None = None) -> dict[str, NodeFn]:
     nodes = dict(DEFAULT_NODES)
