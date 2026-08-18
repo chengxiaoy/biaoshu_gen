@@ -68,6 +68,18 @@ def test_append_docx_merges_tables_and_paragraphs(tmp_path: Path):
     assert len(dest.tables) == 1 and dest.tables[0].cell(0, 0).text == "名称"
 
 
+def test_append_docx_keeps_sectpr_last(tmp_path: Path):
+    src = tmp_path / "src.docx"
+    _make_tender_docx(src)
+    dest = Document()
+    dest.add_paragraph("前言")
+    append_docx(dest, src)
+    body_children = list(dest.element.body.iterchildren())
+    tags = [c.tag.split("}")[-1] for c in body_children]
+    assert tags[-1] == "sectPr"
+    assert "p" in tags and "tbl" in tags[:-1]
+
+
 def test_copy_docx(tmp_path: Path):
     src = tmp_path / "tpl.docx"
     _make_tender_docx(src)

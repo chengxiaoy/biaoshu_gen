@@ -100,10 +100,15 @@ def append_docx(dest: DocumentType, src_path: Path) -> None:
     import copy as _copy
 
     src = Document(str(src_path))
+    sect_pr = dest.element.body.sectPr
     for child in src.element.body.iterchildren():
         tag = child.tag.split("}")[-1]
         if tag in ("p", "tbl"):
-            dest.element.body.append(_copy.deepcopy(child))
+            el = _copy.deepcopy(child)
+            if sect_pr is not None:
+                sect_pr.addprevious(el)   # sectPr 必须是 body 最后一个子元素（ECMA-376）
+            else:
+                dest.element.body.append(el)
 
 
 def copy_docx(src: Path, dest: Path) -> DocumentType:
