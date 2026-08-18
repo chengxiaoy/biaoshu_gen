@@ -35,6 +35,12 @@ DEFAULT_NODES["facts"] = facts_node
 from .outline import outline_node                      # noqa: E402
 DEFAULT_NODES["outline"] = outline_node
 
+from .body import body_node                            # noqa: E402
+DEFAULT_NODES["body"] = body_node
+
+from .body_review import body_review_node              # noqa: E402
+DEFAULT_NODES["body_review"] = body_review_node
+
 
 def get_nodes(overrides: dict[str, NodeFn] | None = None) -> dict[str, NodeFn]:
     nodes = dict(DEFAULT_NODES)
