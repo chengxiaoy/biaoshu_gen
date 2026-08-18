@@ -5,18 +5,28 @@ from ..config import get_settings
 from ..kb import count_chars
 from ..models import make_agent
 from ..prompts.body_review import SYSTEM, build_user_prompt
-from ..schemas import BodyReviewReport
+from ..schemas import BodyReviewReport, Outline, from_yaml_file
 from ..state import BidState, run_dir
 
 
+def _outline_for_use(state: BidState) -> Outline:
+    """用户编辑优先：04_outline.yaml 存在则覆盖 state.outline（resume 时不用陈旧值）。"""
+    yaml_path = run_dir(state) / "04_outline.yaml"
+    if yaml_path.exists():
+        return from_yaml_file(Outline, yaml_path)
+    assert state.outline, "outline 未生成，无法撰写正文"
+    return state.outline
+
+
 def body_review_node(state: BidState) -> dict:
-    assert state.outline and state.body_md_path, "body 未生成"
+    assert state.body_md_path, "body 未生成"
+    outline = _outline_for_use(state)
     d = run_dir(state) / "05_body"
     tolerance = get_settings().word_tolerance
 
     rows: list[str] = []
     word_issues: list[str] = []
-    for i, sec in enumerate(state.outline.sections, 1):
+    for i, sec in enumerate(outline.sections, 1):
         matches = sorted(d.glob(f"{i:02d}-*.md"))
         assert matches, f"章节文件缺失: {d}/{i:02d}-*.md"
         actual = count_chars(matches[0].read_text(encoding="utf-8"))

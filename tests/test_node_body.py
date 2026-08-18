@@ -98,3 +98,69 @@ def test_body_review_pass(tmp_path: Path, monkeypatch, fake_agent_factory):
         {BodyReviewReport: {"passed": True, "issues": []}}))
     updates = br_mod.body_review_node(state)
     assert updates["body_review_passed"] is True
+
+
+def test_body_prefers_edited_outline_yaml(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    state = _state(tmp_path)                            # 陈旧 state.outline：总体方案/实施方案（各 20 字）
+    p = run_dir(state) / "04_outline.yaml"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("sections:\n- title: 用户修改章\n  target_words: 30\n  key_points:\n  - 修改要点\n",
+                 encoding="utf-8")
+    captured = {}
+
+    # pydantic-ai 1.107.5 适配：回调须返回 ModelResponse，捕获每章 user prompt。
+    def make(output_type, system_prompt, retries=2):
+        async def fn(messages, info: AgentInfo):
+            last = messages[-1]
+            content = getattr(last, "content", None)
+            if content is None:
+                content = next(
+                    (p.content for p in getattr(last, "parts", []) if isinstance(p, UserPromptPart)),
+                    "",
+                )
+            captured["prompts"] = captured.get("prompts", []) + [str(content)]
+            tool_name = info.output_tools[0].name if info.output_tools else "final_result"
+            return ModelResponse(parts=[ToolCallPart(
+                tool_name=tool_name, args=json.dumps({"title": "占位", "content": "内容"}),
+            )])
+        return Agent(model=FunctionModel(fn), output_type=output_type,
+                     system_prompt=system_prompt, retries=retries)
+    monkeypatch.setattr(body_mod, "make_agent", make)
+
+    body_mod.body_node(state)
+    d = run_dir(state) / "05_body"
+    assert (d / "01-用户修改章.md").exists()            # 用户编辑的 04_outline.yaml 驱动章节
+    assert not (d / "01-总体方案.md").exists()           # 陈旧的 state.outline 不再使用
+    assert "修改要点" in captured["prompts"][0]          # 编辑后的 key_points 进入 prompt
+
+
+def test_body_falls_back_to_state_outline(tmp_path: Path, monkeypatch, fake_agent_factory):
+    monkeypatch.chdir(tmp_path)
+    state = _state(tmp_path)                            # 无 04_outline.yaml -> 回退 state.outline
+    monkeypatch.setattr(body_mod, "make_agent", fake_agent_factory(
+        {SectionBody: {"title": "占位", "content": "内容"}}))
+    body_mod.body_node(state)
+    d = run_dir(state) / "05_body"
+    assert (d / "01-总体方案.md").exists()
+
+
+def test_body_review_prefers_edited_outline_yaml(tmp_path: Path, monkeypatch, fake_agent_factory):
+    state = _prepare_body(tmp_path, monkeypatch, fake_agent_factory, content="字数合适的内容。" * 3)
+    # 用户编辑 04_outline.yaml：目标 5000 字 -> 实际 24 字必然"字数不足"（state.outline 目标 20 本应通过）
+    p = run_dir(state) / "04_outline.yaml"
+    p.write_text("sections:\n- title: 用户改章\n  target_words: 5000\n  key_points: []\ntotal_words: 5000\n",
+                 encoding="utf-8")
+    monkeypatch.setattr(br_mod, "make_agent", fake_agent_factory(
+        {BodyReviewReport: {"passed": True, "issues": []}}))       # LLM 放行
+    updates = br_mod.body_review_node(state)
+    assert updates["body_review_passed"] is False                  # 按编辑后目标核字数
+    assert any("目标约 5000" in i for i in updates["body_feedback"].split("；"))
+
+
+def test_body_review_falls_back_to_state_outline(tmp_path: Path, monkeypatch, fake_agent_factory):
+    state = _prepare_body(tmp_path, monkeypatch, fake_agent_factory, content="字数合适的内容。" * 3)
+    monkeypatch.setattr(br_mod, "make_agent", fake_agent_factory(
+        {BodyReviewReport: {"passed": True, "issues": []}}))
+    updates = br_mod.body_review_node(state)                       # 无 04_outline.yaml -> 回退 state.outline（20 字目标通过）
+    assert updates["body_review_passed"] is True

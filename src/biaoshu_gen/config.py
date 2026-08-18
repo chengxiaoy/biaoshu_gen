@@ -2,14 +2,21 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", populate_by_name=True,
+    )
 
-    # DeepSeek（PydanticAI 非 harness 节点）
-    deepseek_api_key: str = ""
+    # DeepSeek（PydanticAI 非 harness 节点）。兼容 DEEPSEEK_API_KEY 与 DEEPSEEK_APIKEY 两种命名，
+    # 前者优先（.env 里常写作 DEEPSEEK_APIKEY，避免 key 落空导致鉴权失败）。
+    deepseek_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("DEEPSEEK_API_KEY", "DEEPSEEK_APIKEY"),
+    )
     deepseek_model: str = "deepseek-chat"
     deepseek_base_url: str = "https://api.deepseek.com"
     # harness 节点走 claude-agent-sdk，继承本机 ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN，无需配置

@@ -19,10 +19,9 @@ cp .env.example .env   # 或手动在 .env 写入 DEEPSEEK_API_KEY=sk-xxx
 ## 数据准备
 
 ```bash
-# 招标文件放入 data/tender/（可同时放响应文件模板 *模板*.docx，init 会自动发现）
-cp docs/软件招标文件.docx docs/标书模板.docx data/tender/
-# 企业知识库放入 data/company/（docx/md/txt/jpg 等）
-cp docs/营业执照测试.jpg data/company/
+# 招标文件与企业知识库示例已放于 data/tender/ 与 data/company/，可直接使用
+# 可选：放入响应文件模板 *模板*.docx（biaoshu init 会自动发现 data/tender/ 下的模板）
+cp docs/标书模板_软件.docx data/tender/标书模板.docx
 ```
 
 ## 分阶段使用（人工控制点：03_facts.yaml / 04_outline.yaml 可编辑后续跑）
