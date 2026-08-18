@@ -51,6 +51,11 @@ DEFAULT_NODES["commercial"] = commercial_node
 from .assemble import assemble_node                    # noqa: E402
 DEFAULT_NODES["assemble"] = assemble_node
 
+from .review import review_node                        # noqa: E402
+from .revise import revise_node                        # noqa: E402
+DEFAULT_NODES["review"] = review_node
+DEFAULT_NODES["revise"] = revise_node
+
 
 def get_nodes(overrides: dict[str, NodeFn] | None = None) -> dict[str, NodeFn]:
     nodes = dict(DEFAULT_NODES)
