@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 运行数据（招标文件/企业库/runs 产物）
+data/runs/
