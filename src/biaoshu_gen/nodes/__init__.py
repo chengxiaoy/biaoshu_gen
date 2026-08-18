@@ -48,6 +48,9 @@ DEFAULT_NODES["fill_forms"] = fill_forms_node
 DEFAULT_NODES["deviation_table"] = deviation_table_node
 DEFAULT_NODES["commercial"] = commercial_node
 
+from .assemble import assemble_node                    # noqa: E402
+DEFAULT_NODES["assemble"] = assemble_node
+
 
 def get_nodes(overrides: dict[str, NodeFn] | None = None) -> dict[str, NodeFn]:
     nodes = dict(DEFAULT_NODES)
