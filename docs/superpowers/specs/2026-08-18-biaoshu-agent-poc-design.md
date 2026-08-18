@@ -20,6 +20,8 @@ POC 验收形态：**端到端可跑通**——用仓库 `docs/` 中的样例素
 | harness 节点 | Claude Code SDK（`claude-agent-sdk`），继承本机智谱 Anthropic 兼容网关凭证 |
 | 用户交互 | 分阶段 CLI 子命令，中间产物落盘为 YAML/Markdown 供用户编辑后续跑 |
 | 企业知识库 | 本地目录 + jieba 分词 + BM25 关键词检索，不做向量 RAG |
+| 招标解析读取方式 | docx 按标题切章节；先用仅含目录行的分类调用把章节路由到四组信息；再按组拼接章节内容分别抽取，避免整篇长上下文 |
+| 全局事实的依赖 | 全局事实设定依赖标书元数据 + 评价标准（与上游状态图一致） |
 | 依赖管理 | poetry |
 | 数据存储 | 本地文件系统 |
 | 运行方式 | 本地命令行 |
@@ -44,7 +46,7 @@ CLI (typer)  ──子命令──▶  LangGraph StateGraph（单图 = 文档全
 
 | # | 节点 | 类型 | 输入 → 输出 |
 |---|---|---|---|
-| 1 | `parse_tender` | PydanticAI | 招标文件文本 → 标书元数据 / 标书需求 / 废标扣分项 / 评标标准（四组 Pydantic schema） |
+| 1 | `parse_tender` | PydanticAI | 招标文件 docx 按标题分节 → 目录分类（仅标题行进入分类调用）→ 按组拼接章节内容分别抽取 → 标书元数据 / 标书需求 / 废标扣分项 / 评标标准（四组 Pydantic schema）；单组超长再按整节分批抽取后代码侧合并 |
 | 2 | `extract_template` | harness | 招标文件 → 响应文件模板（目录树 + 每节填写要求，`template.md`）+ 标书目录报告（`report.md`） |
 | 3 | `facts` | PydanticAI | 元数据 + 评分标准 → 全局事实设定（工期/人员配置/软件指标），落盘 `facts.yaml` 供用户编辑 |
 | 4 | `outline` | PydanticAI | 需求 + 技术评分标准 + 事实 → 章节目录 + 各节预期字数，落盘 `outline.yaml` |
@@ -73,7 +75,8 @@ data/
     ├── 03_facts.yaml                 # ← 用户人工控制点 1（可编辑后继续）
     ├── 04_outline.yaml               # ← 用户人工控制点 2（可编辑后继续）
     ├── 05_body/   01-章节.md ... body.md
-    ├── 06_fill/   forms.docx / deviation.docx / commercial.docx
+    ├── 06_fill/   forms/forms.docx、deviation/deviation.docx、commercial/commercial.docx
+    │              （三 harness 节点并行执行，工作区按子目录隔离）
     ├── 07_draft/  标书草稿_v1.docx、标书草稿_v2.docx…（latest.txt 记录当前版本）
     └── 08_review/ review_round_N.md
 ```
@@ -129,7 +132,7 @@ src/biaoshu_gen/
     ├── parse_tender.py  extract_template.py  facts.py  outline.py
     ├── body.py  body_review.py
     ├── fill_forms.py  deviation_table.py  commercial.py
-    └── assemble.py  review.py  revise.py
+    └── review.py  revise.py          # assemble 为纯代码节点，无 prompt 模块
 tests/
 ├── test_schemas.py  test_kb.py  test_docx_io.py  test_graph.py  test_cli.py
 └── test_nodes_fake_model.py  test_harness_mock.py
