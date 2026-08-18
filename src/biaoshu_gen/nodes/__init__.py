@@ -29,6 +29,12 @@ DEFAULT_NODES["parse_tender"] = parse_tender_node
 from .extract_template import extract_template_node  # noqa: E402
 DEFAULT_NODES["extract_template"] = extract_template_node
 
+from .facts import facts_node                          # noqa: E402
+DEFAULT_NODES["facts"] = facts_node
+
+from .outline import outline_node                      # noqa: E402
+DEFAULT_NODES["outline"] = outline_node
+
 
 def get_nodes(overrides: dict[str, NodeFn] | None = None) -> dict[str, NodeFn]:
     nodes = dict(DEFAULT_NODES)
