@@ -70,3 +70,21 @@ def prepare_workspace(run_dir: Path, stage_subdir: str,
         if not target.exists():
             shutil.copyfile(src, target)
     return ws
+
+
+def prepare_agent_workspace(state, subdir: str,
+                            extra_inputs: list[tuple[Path, Path | str]] | None = None) -> Path:
+    """填充/审核类 harness 节点的标准工作区：
+    基础输入 tender.md + invalidation.yaml + 可选 标书模板.docx，附加调用方输入，并生成 kb.md。"""
+    from .kb import KnowledgeBase
+    from .state import run_dir
+
+    parse = run_dir(state) / "01_parse"
+    inputs = [(parse / "tender.md", "tender.md"),
+              (parse / "invalidation.yaml", "invalidation.yaml")]
+    if state.template_docx_path:
+        inputs.append((Path(state.template_docx_path), "标书模板.docx"))
+    inputs.extend([(Path(p), n) for p, n in (extra_inputs or [])])
+    ws = prepare_workspace(run_dir(state), subdir, inputs)
+    KnowledgeBase.load(Path(state.kb_dir)).dump_summary(ws / "kb.md")
+    return ws

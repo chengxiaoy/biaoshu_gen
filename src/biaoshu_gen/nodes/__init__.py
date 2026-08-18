@@ -41,6 +41,13 @@ DEFAULT_NODES["body"] = body_node
 from .body_review import body_review_node              # noqa: E402
 DEFAULT_NODES["body_review"] = body_review_node
 
+from .fill_forms import fill_forms_node                # noqa: E402
+from .deviation_table import deviation_table_node      # noqa: E402
+from .commercial import commercial_node                # noqa: E402
+DEFAULT_NODES["fill_forms"] = fill_forms_node
+DEFAULT_NODES["deviation_table"] = deviation_table_node
+DEFAULT_NODES["commercial"] = commercial_node
+
 
 def get_nodes(overrides: dict[str, NodeFn] | None = None) -> dict[str, NodeFn]:
     nodes = dict(DEFAULT_NODES)

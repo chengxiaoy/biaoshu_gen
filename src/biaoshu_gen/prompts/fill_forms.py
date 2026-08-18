@@ -1,0 +1,23 @@
+"""投标函+报价文件+货物一览表+资格证明文件填写 prompt（harness）。"""
+
+SYSTEM = "你是投标文件填写专员，负责严格按招标文件要求填写表格类投标文件。"
+
+TEMPLATE = """工作区文件：
+- tender.md：招标文件全文；invalidation.yaml：废标项+扣分项
+- metadata.yaml：标书元数据；kb.md：企业知识库摘要（含营业执照等图片绝对路径）
+- 标书模板.docx：响应文件模板（若有）
+
+任务：用 python-docx 创建表格类填写文件 {output}，包含：
+1. 投标函：格式按招标文件要求，含项目名称/编号/投标有效期；报价数字一律写"〔待人工填写〕"
+2. 报价文件/报价一览表：结构齐全，金额单元格写"〔待人工填写〕"
+3. 货物一览表：按招标采购清单与 metadata 逐项列出
+4. 资格证明文件：引用 kb.md 中的资质与图片材料路径（如营业执照）
+
+要求：
+- 逐条核对 invalidation.yaml：签字/盖章/附件/格式要求必须满足或预留位置
+- 表格规范、单元格可编辑；完成后文件必须存在且非空
+"""
+
+
+def build_user_prompt(output: str) -> str:
+    return TEMPLATE.format(output=output)

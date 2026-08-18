@@ -70,6 +70,17 @@ class KnowledgeBase:
     def all_files(self) -> list[Path]:
         return list(self.files)
 
+    def dump_summary(self, path: Path) -> Path:
+        """写给 harness 节点读的知识库摘要：文本块 + 图片绝对路径清单。"""
+        parts = ["# 企业知识库摘要\n"]
+        for c in self.chunks:
+            parts.append(f"## 来源：{c.source.name}\n\n{c.text}\n")
+        if self.images:
+            parts.append("## 图片材料（可直接查看的绝对路径）")
+            parts.extend(f"- {p.resolve()}" for p in self.images)
+        path.write_text("\n".join(parts), encoding="utf-8")
+        return path
+
 
 def count_chars(text: str) -> int:
     """字数统计口径：非空白字符数（正文字数校验使用）。"""
