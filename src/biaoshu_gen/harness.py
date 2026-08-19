@@ -27,15 +27,34 @@ class HarnessTask:
 async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
     from claude_agent_sdk import ClaudeAgentOptions, query
 
+    s = get_settings()
+    # claude CLI 在 ANTHROPIC_BASE_URL 后追加 /v1/messages；OpenAI 风格 base（…/v1）需去尾 /v1，
+    # 使同一份 .env BASE_URL 对两种协议都成立（OpenRouter: …/api/v1/messages 为 Anthropic 兼容端点）。
+    base_url = s.llm_base_url.rstrip("/")
+    if base_url.endswith("/v1"):
+        base_url = base_url[: -len("/v1")]
     options = ClaudeAgentOptions(
         cwd=str(cwd),
         max_turns=max_turns,
         permission_mode="bypassPermissions",   # POC 本机受控工作区
+        model=s.llm_model,
+        setting_sources=[],                    # 跳过用户/项目 settings（其 ANTHROPIC_* 会覆盖注入配置）
+        # 全面使用 .env 配置（BASE_URL/API_KEY/MODEL_NAME），覆盖本机继承的 ANTHROPIC_* 环境变量。
+        env={
+            "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_AUTH_TOKEN": s.llm_api_key,
+            "ANTHROPIC_MODEL": s.llm_model,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": s.llm_model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": s.llm_model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": s.llm_model,
+        },
     )
     final = ""
     async for msg in query(prompt=prompt, options=options):
-        if getattr(msg, "type", "") == "result":
-            final = getattr(msg, "result", "") or ""
+        # claude-agent-sdk 0.2.x 的 ResultMessage 无 .type 字段（type 为 None），
+        # 以 dataclass 属性判断：只有 ResultMessage 带 .result 文本
+        if hasattr(msg, "result") and isinstance(getattr(msg, "result", None), str):
+            final = msg.result or ""
     return final
 
 
