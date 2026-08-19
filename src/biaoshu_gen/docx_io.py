@@ -78,6 +78,14 @@ def docx_to_markdown(path: Path) -> str:
     return "\n\n".join(parts) + "\n"
 
 
+def _add_styled(doc: DocumentType, text: str, style: str):
+    """按样式加段落；样式缺失（常见于中文模板底稿）时回退为普通段落。"""
+    try:
+        return doc.add_paragraph(text, style=style)
+    except KeyError:
+        return doc.add_paragraph(text)
+
+
 def markdown_to_docx(doc: DocumentType, md: str) -> None:
     """极量版 Markdown → docx：标题/列表/段落（POC 够用）。"""
     for line in md.splitlines():
@@ -86,11 +94,14 @@ def markdown_to_docx(doc: DocumentType, md: str) -> None:
             continue
         m = re.match(r"^(#{1,4})\s+(.*)$", s)
         if m:
-            doc.add_heading(m.group(2), level=len(m.group(1)))
+            try:
+                doc.add_heading(m.group(2), level=len(m.group(1)))
+            except KeyError:                      # 模板缺 Heading N 样式时回退
+                doc.add_paragraph(m.group(2))
         elif s.startswith(("- ", "* ")):
-            doc.add_paragraph(s[2:], style="List Bullet")
+            _add_styled(doc, s[2:], "List Bullet")
         elif re.match(r"^\d+\.\s+", s):
-            doc.add_paragraph(re.sub(r"^\d+\.\s+", "", s), style="List Number")
+            _add_styled(doc, re.sub(r"^\d+\.\s+", "", s), "List Number")
         else:
             doc.add_paragraph(re.sub(r"\*\*(.+?)\*\*", r"\1", s))
 

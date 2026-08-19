@@ -86,3 +86,14 @@ def test_copy_docx(tmp_path: Path):
     doc = copy_docx(src, tmp_path / "tpl_copy.docx")
     assert "第一章 招标公告" in "\n".join(p.text for p in doc.paragraphs)
     assert (tmp_path / "tpl_copy.docx").exists()
+
+
+def test_markdown_to_docx_style_fallback():
+    """中文模板底稿常缺 List Bullet 等样式：样式缺失时回退普通段落，不崩溃。"""
+    doc = Document()
+    for name in ("List Bullet", "List Number", "Heading 2"):
+        el = doc.styles[name].element
+        el.getparent().remove(el)
+    markdown_to_docx(doc, "## 某标题\n\n- 要点一\n\n1. 步骤一\n")
+    texts = [p.text for p in doc.paragraphs]
+    assert "要点一" in texts and "步骤一" in texts and "某标题" in texts
