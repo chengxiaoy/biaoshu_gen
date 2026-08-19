@@ -46,18 +46,14 @@ def test_dump_summary_contains_text_and_images(tmp_path: Path):
 
 
 def _with_template(tmp_path: Path, monkeypatch, text: str = "偏离表") -> BidState:
-    """构造含指定段落（默认偏离表）的响应模板与招标文件（判定依据为招标文件）。"""
+    """构造含指定段落（默认偏离表）的响应模板（判定依据为响应模板）。"""
     from docx import Document
     state = _base_state(tmp_path, monkeypatch)
     tpl = tmp_path / "标书模板.docx"
     d = Document()
     d.add_paragraph(text)
     d.save(tpl)
-    tender = tmp_path / "t.docx"
-    d2 = Document()
-    d2.add_paragraph("偏离表" if "偏离" in text else "无偏离要求")
-    d2.save(tender)
-    return state.model_copy(update={"template_docx_path": str(tpl), "tender_path": str(tender)})
+    return state.model_copy(update={"template_docx_path": str(tpl)})
 
 
 def test_three_fill_nodes_isolated_workspaces(tmp_path: Path, monkeypatch):
