@@ -50,6 +50,10 @@ class GlobalFacts(BaseModel):
     staffing: str = ""           # 人员配置
     software_metrics: list[str] = Field(default_factory=list)
     extra: list[str] = Field(default_factory=list)
+    # 投标人企业资料（表格填写用；缺失时由 ensure_business_fields mock 占位）
+    company_name: str = ""       # 企业/投标人名称
+    legal_person: str = ""       # 法定代表人
+    credit_code: str = ""        # 统一社会信用代码
 
 
 class OutlineNode(BaseModel):

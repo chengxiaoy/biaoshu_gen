@@ -55,18 +55,47 @@ def test_three_fill_nodes_isolated_workspaces(tmp_path: Path, monkeypatch):
     u3 = com.commercial_node(state)
 
     assert u1["forms_docx_path"].endswith(str(Path("06_fill/forms/forms.docx")))
-    assert u2["deviation_docx_path"].endswith("deviation.docx")
+    assert u2["deviation_docx_path"] == ""              # 无模板 -> 偏离表跳过
     assert u3["commercial_docx_path"].endswith("commercial.docx")
-    cwds = [str(c[0]) for c in captured]
-    assert len({c[0] for c in captured}) == 3            # 工作区互相隔离
+    assert len({c[0] for c in captured}) == 2            # forms + commercial 两个工作区
     # 标准工作区内容：tender.md / invalidation.yaml / kb.md
     ws = run_dir(state) / "06_fill" / "forms"
     assert (ws / "tender.md").exists() and (ws / "kb.md").exists()
     assert "CMMI5" in (ws / "kb.md").read_text(encoding="utf-8")
     # 各节点附加输入正确
-    assert (ws / "metadata.yaml").exists()
-    assert (run_dir(state) / "06_fill" / "deviation" / "scoring.yaml").exists()
-    assert (run_dir(state) / "06_fill" / "deviation" / "facts.yaml").exists()
+    assert (ws / "metadata.yaml").exists() and (ws / "facts.yaml").exists()
+    assert (run_dir(state) / "06_fill" / "commercial" / "scoring.yaml").exists()
+
+
+def test_deviation_skipped_without_template(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    state = _base_state(tmp_path, monkeypatch)
+    assert dev.deviation_table_node(state) == {"deviation_docx_path": ""}
+
+
+def test_deviation_fills_per_template_when_has_deviation(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    state = _base_state(tmp_path, monkeypatch)
+    from docx import Document
+    tpl = tmp_path / "标书模板.docx"
+    d = Document()
+    d.add_heading("偏离表", level=2)
+    t = d.add_table(rows=1, cols=4)
+    t.cell(0, 0).text = "序号"
+    t.cell(0, 1).text = "招标文件要求"
+    t.cell(0, 2).text = "投标响应"
+    t.cell(0, 3).text = "偏离说明"
+    d.save(tpl)
+    state = state.model_copy(update={"template_docx_path": str(tpl)})
+
+    captured = []
+    monkeypatch.setattr(dev, "run_harness_task", _fake_run(captured))
+    updates = dev.deviation_table_node(state)
+    assert updates["deviation_docx_path"].endswith("deviation.docx")
+    assert len(captured) == 1
+    # 工作区含模板，prompt 强调按模板格式填写
+    assert "标书模板.docx" in captured[0][1]
+    assert "偏离表" in captured[0][1]
 
 
 def test_prepare_agent_workspace_base_inputs(tmp_path: Path, monkeypatch):

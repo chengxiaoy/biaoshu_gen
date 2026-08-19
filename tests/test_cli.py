@@ -75,3 +75,14 @@ def test_status_lists_stages(tmp_path: Path, monkeypatch):
     _init_run(tmp_path)
     r = runner.invoke(cli.app, ["status"])
     assert r.exit_code == 0 and "parse" in r.output
+
+
+def test_stage_completion_backs_up_checkpoint(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    calls: list = []
+    _install_fake_graph(tmp_path, calls, monkeypatch)
+    _init_run(tmp_path)
+    assert runner.invoke(cli.app, ["parse"]).exit_code == 0
+    latest = (tmp_path / "data" / "runs" / ".latest").read_text(encoding="utf-8").strip()
+    ck = tmp_path / "data" / "runs" / latest / "checkpoints" / "parse.sqlite"
+    assert ck.exists() and ck.stat().st_size > 0

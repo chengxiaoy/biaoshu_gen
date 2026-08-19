@@ -126,3 +126,24 @@ def copy_docx(src: Path, dest: Path) -> DocumentType:
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, dest)
     return Document(str(dest))
+
+
+_DEVIATION_KEYWORDS = ("偏离表", "偏离情况", "商务偏离", "技术偏离", "负偏离", "正偏离", "偏离说明")
+
+
+def template_has_deviation_table(tpl_path: Path) -> bool:
+    """动态判断响应模板中是否存在偏离表要求：扫描段落与表格（含表头前几行）。"""
+    if not tpl_path.exists():
+        return False
+    doc = Document(str(tpl_path))
+    for p in doc.paragraphs:
+        if any(k in p.text for k in _DEVIATION_KEYWORDS):
+            return True
+    for tb in doc.tables:
+        for row in tb.rows[:3]:
+            cells = " ".join(c.text for c in row.cells)
+            if "偏离" in cells:
+                return True
+            if ("招标文件要求" in cells or "招标要求" in cells) and "响应" in cells:
+                return True
+    return False

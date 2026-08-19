@@ -1,10 +1,24 @@
-"""节点 8：偏离表（harness 填表）。"""
+"""节点 8：偏离表（harness 填表）。
+
+动态判断：响应模板中有偏离表要求才执行；严格按模板中的偏离表格式填写；
+模板无偏离表 -> 跳过节点（deviation_docx_path 置空，assemble 会忽略）。
+"""
+from pathlib import Path
+
+from ..docx_io import template_has_deviation_table
 from ..harness import HarnessTask, prepare_agent_workspace, run_harness_task
 from ..prompts.deviation_table import SYSTEM, build_user_prompt
 from ..state import BidState, run_dir
 
 
 def deviation_table_node(state: BidState) -> dict:
+    if not state.template_docx_path:
+        print("ℹ 无响应模板，跳过偏离表节点。")
+        return {"deviation_docx_path": ""}
+    if not template_has_deviation_table(Path(state.template_docx_path)):
+        print("ℹ 响应模板中无偏离表要求，跳过偏离表节点。")
+        return {"deviation_docx_path": ""}
+
     ws = prepare_agent_workspace(state, "06_fill/deviation", [
         (run_dir(state) / "01_parse" / "requirements.yaml", "requirements.yaml"),
         (run_dir(state) / "01_parse" / "scoring.yaml", "scoring.yaml"),

@@ -73,6 +73,45 @@ def execute_stage(graph, run_id: str, stage: str | None, initial_input: dict | N
         graph.invoke(None, config, interrupt_after=stop_nodes)
 
 
+def _backup_checkpoint(run_dir: Path, stage: str) -> None:
+    """阶段完成后备份 checkpoint 到 checkpoints/<stage>.sqlite（支持选择性重跑）。"""
+    ck_dir = run_dir / "checkpoints"
+    ck_dir.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(run_dir / "checkpoint.sqlite")
+    dst = sqlite3.connect(ck_dir / f"{stage}.sqlite")
+    try:
+        with dst:
+            src.backup(dst)          # sqlite backup API 处理 WAL，安全复制
+    finally:
+        dst.close()
+        src.close()
+    # 注意：不能在此删除 WAL——graph 连接可能仍持有该文件（Windows 文件锁）。
+
+
+def _restore_checkpoint(run_dir: Path, stage: str) -> None:
+    """把 checkpoints/<stage>.sqlite（该阶段完成时的状态）恢复为当前 checkpoint。"""
+    ck = run_dir / "checkpoints" / f"{stage}.sqlite"
+    if not ck.exists():
+        raise typer.BadParameter(f"没有 {stage} 阶段的 checkpoint 备份（{ck}）")
+    src = sqlite3.connect(ck)
+    dst = sqlite3.connect(run_dir / "checkpoint.sqlite")
+    try:
+        with dst:
+            src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    _drop_wal(run_dir)
+
+
+def _drop_wal(run_dir: Path) -> None:
+    """清除可能残留的 WAL/SHM 文件，避免旧事务污染恢复后的数据库。"""
+    for suffix in ("-wal", "-shm"):
+        p = run_dir / f"checkpoint.sqlite{suffix}"
+        if p.exists():
+            p.unlink()
+
+
 def _run_stage(stage: str | None, run_id_opt: str | None) -> None:
     rid = _resolve_run_id(run_id_opt)
     run = _load_run(rid)
@@ -87,7 +126,28 @@ def _run_stage(stage: str | None, run_id_opt: str | None) -> None:
         err.write_text(f"{e}\n\n{traceback.format_exc()}", encoding="utf-8")
         typer.secho(f"阶段执行失败，详情见 {err}", fg=typer.colors.RED)
         raise typer.Exit(1)
+    if stage is not None:                              # 阶段成功 -> 备份 checkpoint
+        _backup_checkpoint(runs_root() / rid, stage)
     typer.secho(f"完成: {stage or '全部流程'}", fg=typer.colors.GREEN)
+
+
+@app.command()
+def rerun(
+    stage: str = typer.Argument(..., help="要重跑的阶段（回退到其前一个阶段的 checkpoint 备份）"),
+    run_id: str = typer.Option(None, "--run-id"),
+) -> None:
+    """回退到该阶段开始前的 checkpoint 并重跑（选择性重跑）。"""
+    if stage not in STAGE_ORDER:
+        raise typer.BadParameter(f"未知阶段 {stage}，可选: {', '.join(STAGE_ORDER)}")
+    idx = STAGE_ORDER.index(stage)
+    prev = STAGE_ORDER[idx - 1] if idx > 0 else None
+    rid = _resolve_run_id(run_id)
+    run_dir = runs_root() / rid
+    if prev is None:
+        raise typer.BadParameter("parse 是首个阶段，没有可回退的 checkpoint（如需重跑请删除 run 重新 init）")
+    _restore_checkpoint(run_dir, prev)
+    typer.secho(f"已回退到 {prev} 完成时的状态，开始重跑 {stage}…", fg=typer.colors.YELLOW)
+    _run_stage(stage, rid)
 
 
 @app.command()

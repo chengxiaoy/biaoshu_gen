@@ -97,3 +97,25 @@ def test_markdown_to_docx_style_fallback():
     markdown_to_docx(doc, "## 某标题\n\n- 要点一\n\n1. 步骤一\n")
     texts = [p.text for p in doc.paragraphs]
     assert "要点一" in texts and "步骤一" in texts and "某标题" in texts
+
+
+def test_template_has_deviation_table(tmp_path: Path):
+    from biaoshu_gen.docx_io import template_has_deviation_table
+
+    no = tmp_path / "no.docx"
+    d = Document()
+    d.add_paragraph("投标函")
+    d.save(no)
+    assert template_has_deviation_table(no) is False
+
+    yes = tmp_path / "yes.docx"
+    d = Document()
+    d.add_heading("偏离表", level=2)
+    t = d.add_table(rows=1, cols=3)
+    t.cell(0, 0).text = "序号"
+    t.cell(0, 1).text = "招标文件要求"
+    t.cell(0, 2).text = "投标响应"
+    d.save(yes)
+    assert template_has_deviation_table(yes) is True
+
+    assert template_has_deviation_table(tmp_path / "missing.docx") is False
