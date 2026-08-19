@@ -51,3 +51,6 @@ JSON格式要求：
 - [x] KnowledgeBase 该类也应该支持解析PDF文件 可以考虑使用markitdown 将pdf转成markdown放到知识库中（markitdown 在 Py3.14 无 onnxruntime 轮子，改用 pypdf 文本提取；坏/扫描 PDF 跳过不拖垮加载）
 
 - [x] 检查fill阶段的harness填写的策略，应该都从当前的标书模板副本中填写，而不是重新生成新的docx文档，这样可以尽量保证投标文档的格式和模板文档一致（fill_forms/deviation/commercial 三节点统一：以 标书模板.docx 为格式依据在模板副本中填写，无模板则跳过）
+- [x] 在fill阶段时，如果有需要将图片插入到文档的情况，请插入图片，不要插入路径，这和不让大模型读取图片内容并不冲突，大模型可以依据图片文件名判断是否需要插入该图片（fill_forms/commercial/deviation 三 prompt 统一：add_picture 实际插入，仍禁止读取图片内容，依据文件名判断）
+- [x] 在商务响应文件填充时，请依据事实填充，不要编造（commercial prompt：承诺与 facts 一致，资质/案例/人员/业绩只能引用 kb.md 实有内容，缺失留空或注〔待补〕）
+- [x] 在进行填写表格类文件时，请勿删除下划线，同时保持原有格式（fill_forms/commercial/deviation：不得删除/隐藏下划线、表格线、签字/盖章占位，保持模板原格式）
