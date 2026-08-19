@@ -1,10 +1,24 @@
-"""节点 9：商务响应文件（harness 填表）。"""
+"""节点 9：商务响应文件（harness 按响应模板格式填写）。
+
+在响应模板副本的"商务部分"中插入信息文字/图片，而非生成后插入；
+模板中无商务部分则跳过。
+"""
+from pathlib import Path
+
+from ..docx_io import template_has_section
 from ..harness import HarnessTask, prepare_agent_workspace, run_harness_task
 from ..prompts.commercial import SYSTEM, build_user_prompt
 from ..state import BidState, run_dir
 
 
 def commercial_node(state: BidState) -> dict:
+    if not state.template_docx_path:
+        print("ℹ 无响应模板，跳过商务响应节点。")
+        return {"commercial_docx_path": ""}
+    if not template_has_section(Path(state.template_docx_path), "商务"):
+        print("ℹ 响应模板中无商务部分，跳过商务响应节点。")
+        return {"commercial_docx_path": ""}
+
     ws = prepare_agent_workspace(state, "06_fill/commercial", [
         (run_dir(state) / "01_parse" / "scoring.yaml", "scoring.yaml"),
         (run_dir(state) / "01_parse" / "metadata.yaml", "metadata.yaml"),

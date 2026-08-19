@@ -131,19 +131,33 @@ def copy_docx(src: Path, dest: Path) -> DocumentType:
 _DEVIATION_KEYWORDS = ("偏离表", "偏离情况", "商务偏离", "技术偏离", "负偏离", "正偏离", "偏离说明")
 
 
-def template_has_deviation_table(tpl_path: Path) -> bool:
-    """动态判断响应模板中是否存在偏离表要求：扫描段落与表格（含表头前几行）。"""
+def template_has_section(tpl_path: Path, keyword: str, table_hint: bool = False) -> bool:
+    """动态判断响应模板中是否存在含 keyword 的部分（扫描段落；table_hint 时含表头）。"""
     if not tpl_path.exists():
         return False
     doc = Document(str(tpl_path))
     for p in doc.paragraphs:
-        if any(k in p.text for k in _DEVIATION_KEYWORDS):
+        if keyword in p.text:
             return True
+    if table_hint:
+        for tb in doc.tables:
+            for row in tb.rows[:3]:
+                cells = " ".join(c.text for c in row.cells)
+                if keyword in cells:
+                    return True
+    return False
+
+
+def template_has_deviation_table(tpl_path: Path) -> bool:
+    """响应模板中是否存在偏离表要求：段落关键词或含"招标…要求+响应"的表头。"""
+    if not tpl_path.exists():
+        return False
+    if template_has_section(tpl_path, "偏离"):
+        return True
+    doc = Document(str(tpl_path))
     for tb in doc.tables:
         for row in tb.rows[:3]:
             cells = " ".join(c.text for c in row.cells)
-            if "偏离" in cells:
-                return True
             if ("招标文件要求" in cells or "招标要求" in cells) and "响应" in cells:
                 return True
     return False

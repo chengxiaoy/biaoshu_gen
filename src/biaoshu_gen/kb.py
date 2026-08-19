@@ -10,7 +10,20 @@ from .docx_io import docx_to_markdown
 
 _TEXT_EXTS = {".txt", ".md"}
 _DOCX_EXTS = {".docx"}
+_PDF_EXTS = {".pdf"}
 _CHUNK_SIZE = 800
+
+
+def _pdf_to_markdown(path: Path) -> str:
+    """PDF 文本提取（pypdf；扫描件需先 OCR，本 POC 仅处理文本层 PDF）。"""
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(path), strict=False)   # 对坏/缺 xref 容错（扫描件/损坏 PDF 常见）
+    parts = []
+    for i, page in enumerate(reader.pages, 1):
+        text = (page.extract_text() or "").strip()
+        parts.append(f"## 第 {i} 页\n\n{text}" if text else f"## 第 {i} 页\n\n（无文本层）")
+    return "\n\n".join(parts)
 
 
 @dataclass
@@ -38,6 +51,11 @@ class KnowledgeBase:
                 kb._add_text(p, p.read_text(encoding="utf-8"))
             elif p.suffix.lower() in _DOCX_EXTS:
                 kb._add_text(p, docx_to_markdown(p))
+            elif p.suffix.lower() in _PDF_EXTS:
+                try:
+                    kb._add_text(p, _pdf_to_markdown(p))
+                except Exception:                # 坏 PDF/扫描件：跳过解析，不拖垮整个 KB
+                    continue
             elif p.suffix.lower() in {".jpg", ".jpeg", ".png"}:
                 kb.images.append(p)
         return kb

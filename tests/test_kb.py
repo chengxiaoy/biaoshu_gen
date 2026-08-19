@@ -43,3 +43,24 @@ def test_search_empty_kb(tmp_path: Path):
 def test_count_chars():
     assert count_chars("你好  world\n") == 7
     assert count_chars("") == 0
+
+
+def test_load_registers_pdf_and_skips_bad(tmp_path: Path):
+    """PDF 注册进 files；坏 PDF 不拖垮加载（跳过分块）。"""
+    kb_dir = tmp_path / "kb"
+    kb_dir.mkdir()
+    (kb_dir / "bad.pdf").write_bytes(b"%PDF-not-a-real-file")
+    kb = KnowledgeBase.load(kb_dir)
+    assert any(p.name == "bad.pdf" for p in kb.files)
+    assert not any("bad.pdf" == c.source.name for c in kb.chunks)  # 解析失败未入块
+
+
+def test_pdf_parsing_real_file(tmp_path: Path):
+    """真实 PDF 提取健壮性：不抛异常、返回非空字符串（扫描件会以占位文本呈现）。"""
+    import biaoshu_gen.kb as kbmod
+
+    real = next(Path("data/company").rglob("*.pdf"), None)
+    if real is None:
+        return
+    text = kbmod._pdf_to_markdown(real)
+    assert isinstance(text, str) and text.strip()

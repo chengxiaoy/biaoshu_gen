@@ -25,6 +25,12 @@ class Settings(BaseSettings):
         default="https://api.deepseek.com",
         validation_alias=AliasChoices("BASE_URL", "DEEPSEEK_BASE_URL"),
     )
+    # harness 节点（claude CLI）可用独立模型；缺省跟随 llm_model。
+    # 用途：当主模型额度紧张时，可把 HARNESS_MODEL 指向免费档模型，避免 402。
+    harness_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("HARNESS_MODEL", "HARNESS_MODEL_NAME"),
+    )
 
     @field_validator("llm_base_url")
     @classmethod

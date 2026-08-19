@@ -29,6 +29,8 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
     from claude_agent_sdk import ClaudeAgentOptions, query
 
     s = get_settings()
+    # harness 节点可用独立模型（HARNESS_MODEL），缺省跟随 llm_model。
+    model = s.harness_model or s.llm_model
     # claude CLI 在 ANTHROPIC_BASE_URL 后追加 /v1/messages；OpenAI 风格 base（…/v1）需去尾 /v1，
     # 使同一份 .env BASE_URL 对两种协议都成立（OpenRouter: …/api/v1/messages 为 Anthropic 兼容端点）。
     base_url = s.llm_base_url.rstrip("/")
@@ -38,16 +40,16 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
         cwd=str(cwd),
         max_turns=max_turns,
         permission_mode="bypassPermissions",   # POC 本机受控工作区
-        model=s.llm_model,
+        model=model,
         setting_sources=[],                    # 跳过用户/项目 settings（其 ANTHROPIC_* 会覆盖注入配置）
         # 全面使用 .env 配置（BASE_URL/API_KEY/MODEL_NAME），覆盖本机继承的 ANTHROPIC_* 环境变量。
         env={
             "ANTHROPIC_BASE_URL": base_url,
             "ANTHROPIC_AUTH_TOKEN": s.llm_api_key,
-            "ANTHROPIC_MODEL": s.llm_model,
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": s.llm_model,
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": s.llm_model,
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": s.llm_model,
+            "ANTHROPIC_MODEL": model,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
         },
     )
     final = ""
