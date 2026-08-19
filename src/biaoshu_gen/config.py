@@ -48,10 +48,10 @@ class Settings(BaseSettings):
     # 流程控制参数（设计文档 §7）
     body_review_max_rounds: int = 2
     revise_max_rounds: int = 2
-    word_tolerance: float = 0.2
+    word_tolerance: float = 0.5
     harness_max_turns: int = 100
     kb_top_k: int = 5
-    body_concurrency: int = 2         # 正文按三级小节并发生成的并发数
+    body_concurrency: int = 6         # 正文按三级小节并发生成的并发数
 
 
 @lru_cache
