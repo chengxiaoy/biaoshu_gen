@@ -5,6 +5,7 @@ SDK 以子进程方式拉起 claude CLI，自动继承本机环境
 """
 import asyncio
 import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -42,10 +43,20 @@ def _missing_outputs(paths: list[Path]) -> list[Path]:
     return [p for p in paths if not p.exists() or p.stat().st_size == 0]
 
 
+def _run_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
+    """asyncio.run 包装；网关偶发 error result 时抛出（上层重试）。"""
+    return asyncio.run(_query_sdk(prompt, cwd, max_turns))
+
+
 def run_harness_task(task: HarnessTask) -> list[Path]:
-    """执行任务；产物缺失 -> 带反馈重试一次 -> 仍缺失则抛 HarnessError。"""
+    """执行任务；SDK 异常或产物缺失 -> 带反馈重试一次 -> 仍失败则抛 HarnessError。"""
     max_turns = task.max_turns or get_settings().harness_max_turns
-    first = asyncio.run(_query_sdk(task.prompt, task.cwd, max_turns))
+    first = ""
+    try:
+        first = _run_sdk(task.prompt, task.cwd, max_turns)
+    except Exception as e:                    # 网关/子进程偶发失败，重试一次
+        print(f"⚠ harness SDK 首次调用失败（{e}），重试一次…", file=sys.stderr)
+        first = _run_sdk(task.prompt, task.cwd, max_turns)
     missing = _missing_outputs(task.expected_outputs)
     if missing:
         retry = (

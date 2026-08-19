@@ -57,3 +57,20 @@ def test_run_harness_task_retry_can_succeed(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(harness, "_query_sdk", fake)
     assert run_harness_task(HarnessTask(prompt="p", cwd=tmp_path,
                                         expected_outputs=[tmp_path / "expected.md"]))
+
+
+def test_run_harness_task_retries_on_sdk_exception(tmp_path: Path, monkeypatch):
+    """SDK 首次调用异常（网关偶发）-> 重试一次成功。"""
+    calls = []
+
+    async def flaky(prompt, cwd, max_turns):
+        calls.append(prompt)
+        if len(calls) == 1:
+            raise RuntimeError("Claude Code returned an error result")
+        (Path(cwd) / "expected.md").write_text("ok", encoding="utf-8")
+        return "done"
+
+    monkeypatch.setattr(harness, "_query_sdk", flaky)
+    out = tmp_path / "expected.md"
+    assert run_harness_task(HarnessTask(prompt="p", cwd=tmp_path, expected_outputs=[out])) == [out]
+    assert len(calls) == 2
