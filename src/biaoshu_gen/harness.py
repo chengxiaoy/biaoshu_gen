@@ -6,6 +6,7 @@ SDK 以子进程方式拉起 claude CLI，自动继承本机环境
 import asyncio
 import shutil
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -67,15 +68,23 @@ def _run_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
     return asyncio.run(_query_sdk(prompt, cwd, max_turns))
 
 
+_SDK_RETRIES = 3          # SDK 异常（网关/子进程偶发 error result）重试次数
+
+
 def run_harness_task(task: HarnessTask) -> list[Path]:
-    """执行任务；SDK 异常或产物缺失 -> 带反馈重试一次 -> 仍失败则抛 HarnessError。"""
+    """执行任务；SDK 异常重试（≤3 次退避）；产物缺失再带反馈重试一次 -> 仍失败抛 HarnessError。"""
     max_turns = task.max_turns or get_settings().harness_max_turns
     first = ""
-    try:
-        first = _run_sdk(task.prompt, task.cwd, max_turns)
-    except Exception as e:                    # 网关/子进程偶发失败，重试一次
-        print(f"⚠ harness SDK 首次调用失败（{e}），重试一次…", file=sys.stderr)
-        first = _run_sdk(task.prompt, task.cwd, max_turns)
+    for attempt in range(_SDK_RETRIES):
+        try:
+            first = _run_sdk(task.prompt, task.cwd, max_turns)
+            break
+        except Exception as e:                # 网关/子进程偶发 error result
+            if attempt == _SDK_RETRIES - 1:
+                raise
+            print(f"⚠ harness SDK 调用失败（{e}），{attempt + 1}/{_SDK_RETRIES} 次后重试…",
+                  file=sys.stderr)
+            time.sleep(15 * (attempt + 1))
     missing = _missing_outputs(task.expected_outputs)
     if missing:
         retry = (
