@@ -193,3 +193,21 @@ def test_body_prefers_edited_outline_yaml(tmp_path: Path, monkeypatch):
     body_mod.body_node(state)
     assert "修改要点" in captured[0]                       # 编辑后的目录进入 prompt
     assert (run_dir(state) / "05_body" / "1.1-修改要点节.md").exists()
+
+
+def test_body_resumes_from_existing_leaf_files(tmp_path: Path, monkeypatch):
+    """崩溃续跑：全新运行时已存在的叶子文件直接复用，只生成缺失的。"""
+    monkeypatch.chdir(tmp_path)
+    state = _state(tmp_path)
+    monkeypatch.setattr(body_mod, "make_agent", _factory(OK_CONTENT))
+    body_mod.body_node(state)
+    d = run_dir(state) / "05_body"
+    (d / "2.2-质量保障.md").unlink()                    # 模拟中途崩溃丢一个小节
+
+    captured: list = []
+    monkeypatch.setattr(body_mod, "make_agent", _factory("补生成内容" * 5, captured))
+    body_mod.body_node(_state(tmp_path))
+
+    assert "补生成内容" in (d / "2.2-质量保障.md").read_text(encoding="utf-8")
+    assert OK_CONTENT in (d / "1.1-背景现状.md").read_text(encoding="utf-8")  # 未重跑
+    assert len(captured) == 1                           # 只补生成缺失的一个

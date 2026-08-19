@@ -54,15 +54,22 @@ def body_node(state: BidState) -> dict:
 
     # 回环修复：只重生成有问题的小节；fix id 在当前目录中不存在（目录被改过）则整体重生成
     leaf_by_id = {l.id: l for l in leaves}
+    fix_requested = bool(state.body_fix_sections)
     fix_ids = [i for i in state.body_fix_sections if i in leaf_by_id]
-    if state.body_fix_sections and not fix_ids:
-        fix_ids = []
-    targets = [leaf_by_id[i] for i in fix_ids] if fix_ids else leaves
+    if fix_requested and not fix_ids:
+        targets, reuse_existing = leaves, False        # 目录已改 -> 整体重生成
+    elif fix_requested:
+        targets, reuse_existing = [leaf_by_id[i] for i in fix_ids], False
+    else:
+        targets, reuse_existing = leaves, True         # 全新运行：已有叶子文件复用（崩溃续跑）
 
     tree = _tree_text(outline)
     agent = make_agent(SectionBody, SYSTEM)
 
     def gen(leaf: OutlineNode) -> tuple[OutlineNode, SectionBody]:
+        f = _leaf_file(d, leaf)
+        if reuse_existing and f.exists():
+            return leaf, SectionBody(title=leaf.title, content=f.read_text(encoding="utf-8"))
         snippets = kb.search(f"{leaf.title} {leaf.description}")
         kb_text = "\n\n".join(f"【{c.source.name}】\n{c.text}" for c in snippets) or "（无）"
         result = run_sync(agent, build_user_prompt(
