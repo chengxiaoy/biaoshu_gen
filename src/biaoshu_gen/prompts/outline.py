@@ -16,9 +16,12 @@ TEMPLATE = """为技术方案生成章节目录。
 【响应文件模板结构（目录须与之衔接）】
 {template_md}
 
-输出要求：
-- sections：章节列表（title、target_words 预期字数、key_points 要点）
-- 章节粒度适中（5~10 章），总字数符合投标常见体量（total_words 为各章之和）
+输出要求（字段长度是硬约束，超长会被系统拒绝）：
+- sections：5~10 章的章节列表
+- title：章节标题，不超过 25 个汉字，不得包含写作建议、括号说明或换行
+- target_words：本章预期字数（整数）
+- key_points：本章要点，最多 4 条、每条不超过 30 个汉字（短语，不是段落）
+- total_words：各章 target_words 之和
 """
 
 

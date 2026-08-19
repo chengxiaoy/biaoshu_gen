@@ -76,7 +76,9 @@ def test_outline_generates_with_template_context(tmp_path: Path, monkeypatch):
             tool_name = info.output_tools[0].name if info.output_tools else "final_result"
             return ModelResponse(parts=[ToolCallPart(
                 tool_name=tool_name,
-                args=json.dumps({"sections": [{"title": "总体方案"}], "total_words": 500}),
+                args=json.dumps({"sections": [
+                    {"title": "总体方案"}, {"title": "实施组织"}, {"title": "服务承诺"},
+                ], "total_words": 500}),
             )])
         return Agent(model=FunctionModel(fn), output_type=output_type,
                      system_prompt=system_prompt, retries=retries)
@@ -102,7 +104,9 @@ def test_outline_prefers_edited_facts_yaml(tmp_path: Path, monkeypatch):
             tool_name = info.output_tools[0].name if info.output_tools else "final_result"
             return ModelResponse(parts=[ToolCallPart(
                 tool_name=tool_name,
-                args=json.dumps({"sections": [{"title": "总体方案"}], "total_words": 500}),
+                args=json.dumps({"sections": [
+                    {"title": "总体方案"}, {"title": "实施组织"}, {"title": "服务承诺"},
+                ], "total_words": 500}),
             )])
         return Agent(model=FunctionModel(fn), output_type=output_type,
                      system_prompt=system_prompt, retries=retries)
@@ -125,7 +129,9 @@ def test_outline_falls_back_to_state_facts(tmp_path: Path, monkeypatch):
             tool_name = info.output_tools[0].name if info.output_tools else "final_result"
             return ModelResponse(parts=[ToolCallPart(
                 tool_name=tool_name,
-                args=json.dumps({"sections": [{"title": "总体方案"}], "total_words": 500}),
+                args=json.dumps({"sections": [
+                    {"title": "总体方案"}, {"title": "实施组织"}, {"title": "服务承诺"},
+                ], "total_words": 500}),
             )])
         return Agent(model=FunctionModel(fn), output_type=output_type,
                      system_prompt=system_prompt, retries=retries)
@@ -133,3 +139,20 @@ def test_outline_falls_back_to_state_facts(tmp_path: Path, monkeypatch):
 
     outline_mod.outline_node(state)                    # 无 03_facts.yaml -> 回退 state.facts
     assert "90 天" in captured["last_prompt"]
+
+
+def test_outline_sanitize_meta_leak():
+    from biaoshu_gen.nodes.outline import _sanitize
+    from biaoshu_gen.schemas import Outline, OutlineSection
+
+    o = Outline(sections=[
+        OutlineSection(title="项目理解分析报告……此处命名为：项目理解与总体建设思路，请以最终输出为准。下面重新输出干净的标题列表。"),
+        OutlineSection(title="项目理解与总体建设思路"),
+        OutlineSection(title="实施组织" * 15),      # 超长标题 -> 截断
+        OutlineSection(title="培训方案"),
+    ])
+    s = _sanitize(o)
+    titles = [x.title for x in s.sections]
+    assert titles[0] == "项目理解与总体建设思路"
+    assert all("重新输出" not in t and "此处命名" not in t for t in titles)
+    assert max(len(t) for t in titles) <= 40

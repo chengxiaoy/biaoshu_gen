@@ -41,3 +41,12 @@ def test_toc_map_parse():
     tm = TocMap.model_validate({"assignments": [
         {"index": 1, "title": "评标办法", "categories": ["scoring", "invalidation"]}]})
     assert tm.assignments[0].categories == ["scoring", "invalidation"]
+
+
+def test_outline_requires_sections():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Outline.model_validate({"sections": [], "total_words": 0})
+    with pytest.raises(ValidationError):          # 省略字段同样拒绝（默认值不校验的坑）
+        Outline.model_validate({"total_words": 0})

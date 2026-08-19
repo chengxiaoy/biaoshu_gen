@@ -59,8 +59,12 @@ class OutlineSection(BaseModel):
 
 
 class Outline(BaseModel):
-    """技术方案目录（人工控制点 2：04_outline.yaml）。"""
-    sections: list[OutlineSection] = Field(default_factory=list)
+    """技术方案目录（人工控制点 2：04_outline.yaml）。sections 必填且至少一章。
+
+    注意：不能用 default_factory——pydantic v2 默认不校验默认值，
+    模型省略该字段时会静默得到空列表（实测踩坑）。
+    """
+    sections: list[OutlineSection] = Field(min_length=1)
     total_words: int = 0
 
 
