@@ -50,4 +50,4 @@ JSON格式要求：
 - [x] 在最终节点review时应确保 技术方案正文的标题格式应该和响应模板中整体的标题结构融合，同时不能删减或调整当前响应模板文件中的结构或章节
 - [x] KnowledgeBase 该类也应该支持解析PDF文件 可以考虑使用markitdown 将pdf转成markdown放到知识库中（markitdown 在 Py3.14 无 onnxruntime 轮子，改用 pypdf 文本提取；坏/扫描 PDF 跳过不拖垮加载）
 
-- [ ] 检查fill阶段的harness填写的策略，应该都从当前的标书模板副本中填写，而不是重新生成新的docx文档，这样可以尽量保证投标文档的格式和模板文档一致
+- [x] 检查fill阶段的harness填写的策略，应该都从当前的标书模板副本中填写，而不是重新生成新的docx文档，这样可以尽量保证投标文档的格式和模板文档一致（fill_forms/deviation/commercial 三节点统一：以 标书模板.docx 为格式依据在模板副本中填写，无模板则跳过）
