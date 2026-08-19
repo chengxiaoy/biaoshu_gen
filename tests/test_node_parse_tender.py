@@ -6,10 +6,11 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import ModelResponse, ToolCallPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from biaoshu_gen.docx_io import DocxSection
 from biaoshu_gen.nodes import DEFAULT_NODES, NODE_NAMES
 from biaoshu_gen.nodes import parse_tender as pt
 from biaoshu_gen.schemas import (
-    InvalidationItems, ScoringStandards, TocMap, TenderMetadata, TenderRequirements,
+    InvalidationItems, ScoringStandards, TenderMetadata, TenderRequirements,
 )
 from biaoshu_gen.state import BidState, run_dir
 
@@ -45,15 +46,27 @@ def test_node_names_registry():
     assert callable(DEFAULT_NODES["extract_template"])  # 未实现 -> stub
 
 
-def test_parse_tender_routes_sections_by_toc(tmp_path: Path, monkeypatch):
+def test_classify_sections_keyword_routing():
+    """纯代码路由：标题命中 + 上级章节继承 + 无命中不入组。"""
+    secs = [
+        DocxSection(0, "(前言)", "抬头"),
+        DocxSection(1, "第五章 评标办法", "x"),
+        DocxSection(3, "比较和评价", "y"),          # 无关键词，继承上级"评标"
+        DocxSection(3, "应予废标的情形", "z"),       # 自身命中废标 -> invalidation+scoring
+        DocxSection(1, "第七章 投标文件格式", "w"),
+        DocxSection(4, "投标函", "v"),               # 与其上级均无命中
+    ]
+    r = pt.classify_sections(secs)
+    assert 2 in r["scoring"] and 3 in r["scoring"]      # 继承
+    assert 4 in r["scoring"] and 4 in r["invalidation"]
+    assert 5 not in r["scoring"] and 6 not in r["scoring"]
+    assert 1 not in r["metadata"]                       # 前言不误入
+
+
+def test_parse_tender_routes_sections_by_keywords(tmp_path: Path, monkeypatch):
     state = _state(tmp_path, monkeypatch)
     captured: list[tuple[type, str]] = []
     presets: dict[type, dict] = {
-        TocMap: {"assignments": [
-            {"index": 1, "title": "第一章 招标公告", "categories": ["metadata"]},
-            {"index": 2, "title": "第二章 技术要求", "categories": ["requirements"]},
-            {"index": 3, "title": "第三章 评标办法", "categories": ["scoring"]},
-        ]},
         TenderMetadata: {"project_name": "演示项目"},
         TenderRequirements: {"tech_requirements": ["1000 并发"]},
         ScoringStandards: {"price_rules": "最低价得 100 分"},
@@ -74,22 +87,21 @@ def test_parse_tender_routes_sections_by_toc(tmp_path: Path, monkeypatch):
     d = run_dir(state) / "01_parse"
     assert (d / "tender.md").exists()
     assert (d / "metadata.yaml").exists() and (d / "scoring.yaml").exists()
+    assert (d / "routing.yaml").exists()               # 路由透明化
     assert updates["metadata"].project_name == "演示项目"
     assert updates["requirements"].tech_requirements == ["1000 并发"]
 
-    # 分节路由断言：分类调用只看到目录行（不含章节正文）；每组抽取只看到本组章节内容
-    # 注：不能用裸「项目名称」判不在——分类模板的信息组定义里本就含「项目名称/编号」，
-    # 故用正文原文「项目名称：演示项目」断言章节内容未进入分类调用。
-    toc_prompt = next(p for t, p in captured if t is TocMap)
-    assert "招标公告" in toc_prompt and "项目名称：演示项目" not in toc_prompt
+    # 分节路由断言：每组抽取只看到本组章节内容（关键词路由，无 LLM 分类调用）
+    called_types = {t for t, _ in captured}
+    assert called_types == {TenderMetadata, TenderRequirements, ScoringStandards}
     meta_prompt = next(p for t, p in captured if t is TenderMetadata)
     assert "项目名称：演示项目" in meta_prompt and "评标办法" not in meta_prompt
     scoring_prompt = next(p for t, p in captured if t is ScoringStandards)
     assert "最低价得 100 分" in scoring_prompt and "技术要求" not in scoring_prompt
 
 
-def test_parse_tender_keyword_sections_forced_to_invalidation(tmp_path: Path, monkeypatch):
-    """标题含 废标/无效/扣分/偏离 的章节，即使分类遗漏也强制并入 invalidation 组。"""
+def test_parse_tender_keyword_sections_routed_to_invalidation(tmp_path: Path, monkeypatch):
+    """标题含 废标/无效/扣分/偏离 的章节自动进入 invalidation 组。"""
     monkeypatch.chdir(tmp_path)
     tender = tmp_path / "t2.docx"
     d = Document()
@@ -99,7 +111,6 @@ def test_parse_tender_keyword_sections_forced_to_invalidation(tmp_path: Path, mo
     state = BidState(run_id="run-2", tender_path=str(tender))
 
     presets: dict[type, dict] = {
-        TocMap: {"assignments": [{"index": 1, "title": "废标条款", "categories": []}]},
         InvalidationItems: {"items": [{"kind": "废标项", "requirement": "不得逾期送达"}]},
     }
 
@@ -113,4 +124,4 @@ def test_parse_tender_keyword_sections_forced_to_invalidation(tmp_path: Path, mo
 
     monkeypatch.setattr(pt, "make_agent", make)
     updates = pt.parse_tender_node(state)
-    assert updates["invalidation"].items[0].kind == "废标项"   # 兜底路由使抽取确实发生
+    assert updates["invalidation"].items[0].kind == "废标项"   # 关键词路由使抽取确实发生
