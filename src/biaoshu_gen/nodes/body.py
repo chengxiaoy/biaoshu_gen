@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 from ..kb import KnowledgeBase
-from ..models import make_agent
+from ..models import make_agent, run_sync
 from ..prompts.body import SYSTEM, build_user_prompt
 from ..schemas import Outline, SectionBody, from_yaml_file
 from ..state import BidState, run_dir
@@ -33,7 +33,7 @@ def body_node(state: BidState) -> dict:
     for i, sec in enumerate(outline.sections, 1):
         snippets = kb.search(sec.title + " " + " ".join(sec.key_points))
         kb_text = "\n\n".join(f"【{c.source.name}】\n{c.text}" for c in snippets) or "（无）"
-        result: SectionBody = agent.run_sync(build_user_prompt(
+        result: SectionBody = run_sync(agent, build_user_prompt(
             title=sec.title, target_words=sec.target_words, key_points=sec.key_points,
             facts=facts_text, kb=kb_text, feedback=state.body_feedback,
         )).output

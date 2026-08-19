@@ -5,7 +5,7 @@ import yaml
 from pydantic import BaseModel
 
 from ..docx_io import DocxSection, docx_to_markdown, docx_to_sections
-from ..models import make_agent
+from ..models import make_agent, run_sync
 from ..prompts.parse_tender import SYSTEM_EXTRACT, build_extract_prompt
 from ..schemas import (
     InvalidationItems, ScoringStandards, TenderMetadata, TenderRequirements,
@@ -124,10 +124,10 @@ def parse_tender_node(state: BidState) -> dict:
             results[group] = tp()
             continue
         objs = [
-            make_agent(tp, SYSTEM_EXTRACT).run_sync(
-                build_extract_prompt(desc, "\n\n".join(
-                    (f"{'#' * s.level} {s.title}\n\n" if s.level else "") + s.content
-                    for s in batch))).output
+            run_sync(make_agent(tp, SYSTEM_EXTRACT),
+                     build_extract_prompt(desc, "\n\n".join(
+                         (f"{'#' * s.level} {s.title}\n\n" if s.level else "") + s.content
+                         for s in batch))).output
             for batch in _batches(group_sections)
         ]
         results[group] = _merge(objs) if len(objs) > 1 else objs[0]

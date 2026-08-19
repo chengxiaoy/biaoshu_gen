@@ -1,7 +1,7 @@
 """节点 4：技术方案目录生成（人工控制点 2：04_outline.yaml 用户编辑优先）。"""
 from pathlib import Path
 
-from ..models import make_agent
+from ..models import make_agent, run_sync
 from ..prompts.outline import SYSTEM, build_user_prompt
 from ..schemas import GlobalFacts, Outline, from_yaml_file, to_yaml_file
 from ..state import BidState, run_dir
@@ -18,7 +18,7 @@ def outline_node(state: BidState) -> dict:
     # 用户编辑优先：03_facts.yaml 存在则以其内容覆盖 state.facts（resume 时不用陈旧值）
     facts = from_yaml_file(GlobalFacts, facts_yaml) if facts_yaml.exists() else state.facts
     agent = make_agent(Outline, SYSTEM)
-    result: Outline = agent.run_sync(build_user_prompt(
+    result: Outline = run_sync(agent, build_user_prompt(
         requirements=state.requirements.model_dump_json(indent=2) if state.requirements else "",
         technical_rules="\n".join(state.scoring.technical_rules) if state.scoring else "",
         facts=facts.model_dump_json(indent=2) if facts else "",

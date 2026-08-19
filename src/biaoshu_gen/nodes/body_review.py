@@ -3,7 +3,7 @@ from pathlib import Path
 
 from ..config import get_settings
 from ..kb import count_chars
-from ..models import make_agent
+from ..models import make_agent, run_sync
 from ..prompts.body_review import SYSTEM, build_user_prompt
 from ..schemas import BodyReviewReport, Outline, from_yaml_file
 from ..state import BidState, run_dir
@@ -44,7 +44,7 @@ def body_review_node(state: BidState) -> dict:
 
     body = Path(state.body_md_path).read_text(encoding="utf-8")
     agent = make_agent(BodyReviewReport, SYSTEM)
-    report: BodyReviewReport = agent.run_sync(build_user_prompt(
+    report: BodyReviewReport = run_sync(agent, build_user_prompt(
         facts=state.facts.model_dump_json(indent=2) if state.facts else "",
         invalidation=invalidation_text,
         word_table="\n".join(rows),
