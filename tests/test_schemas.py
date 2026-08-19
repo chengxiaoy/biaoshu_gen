@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from biaoshu_gen.schemas import (
-    GlobalFacts, InvalidationItem, Outline, OutlineSection, TocMap,
+    GlobalFacts, InvalidationItem, Outline, OutlineNode, TocMap,
     from_yaml_file, to_yaml_file,
 )
 
@@ -32,9 +32,14 @@ def test_from_yaml_file_field_error(tmp_path: Path):
     assert "target_words" in str(e.value)
 
 
-def test_outline_defaults():
-    o = OutlineSection(title="总体方案")
-    assert o.target_words == 500 and o.key_points == []
+def test_outline_node_tree():
+    o = OutlineNode(title="总体方案")
+    assert o.target_words == 0 and o.children == [] and o.description == ""
+    tree = Outline(sections=[OutlineNode(id="1", title="章", children=[
+        OutlineNode(id="1.1", title="节", children=[
+            OutlineNode(id="1.1.1", title="小节", target_words=500)])])])
+    leaves = tree.leaves()
+    assert len(leaves) == 1 and leaves[0].id == "1.1.1" and leaves[0].target_words == 500
 
 
 def test_toc_map_parse():

@@ -1,21 +1,14 @@
-"""节点 6：正文审核检验（一致性/事实/废标扣分/字数 ±20%）。"""
+"""节点 6：正文审核检验（叶子小节粒度：字数 ±20% + 一致性），圈定需修复的小节 id。"""
 from pathlib import Path
 
 from ..config import get_settings
 from ..kb import count_chars
 from ..models import make_agent, run_sync
 from ..prompts.body_review import SYSTEM, build_user_prompt
-from ..schemas import BodyReviewReport, Outline, from_yaml_file
+from ..schemas import BodyReviewReport, from_yaml_file
 from ..state import BidState, run_dir
 
-
-def _outline_for_use(state: BidState) -> Outline:
-    """用户编辑优先：04_outline.yaml 存在则覆盖 state.outline（resume 时不用陈旧值）。"""
-    yaml_path = run_dir(state) / "04_outline.yaml"
-    if yaml_path.exists():
-        return from_yaml_file(Outline, yaml_path)
-    assert state.outline, "outline 未生成，无法撰写正文"
-    return state.outline
+from .body import _leaf_file, _outline_for_use
 
 
 def body_review_node(state: BidState) -> dict:
@@ -26,15 +19,18 @@ def body_review_node(state: BidState) -> dict:
 
     rows: list[str] = []
     word_issues: list[str] = []
-    for i, sec in enumerate(outline.sections, 1):
-        matches = sorted(d.glob(f"{i:02d}-*.md"))
-        assert matches, f"章节文件缺失: {d}/{i:02d}-*.md"
-        actual = count_chars(matches[0].read_text(encoding="utf-8"))
-        rows.append(f"- 《{sec.title}》 目标 {sec.target_words} 字 / 实际 {actual} 字")
-        if actual < sec.target_words * (1 - tolerance):
-            word_issues.append(f"章节《{sec.title}》字数不足：目标约 {sec.target_words}，实际 {actual}")
-        elif actual > sec.target_words * (1 + tolerance):
-            word_issues.append(f"章节《{sec.title}》字数超出：目标约 {sec.target_words}，实际 {actual}")
+    word_fix_ids: list[str] = []
+    for leaf in outline.leaves():
+        f = _leaf_file(d, leaf)
+        assert f.exists(), f"小节文件缺失: {f}"
+        actual = count_chars(f.read_text(encoding="utf-8"))
+        rows.append(f"- [{leaf.id}] {leaf.title}：目标 {leaf.target_words} 字 / 实际 {actual} 字")
+        if actual < leaf.target_words * (1 - tolerance):
+            word_issues.append(f"[{leaf.id}]《{leaf.title}》字数不足：目标约 {leaf.target_words}，实际 {actual}")
+            word_fix_ids.append(leaf.id)
+        elif actual > leaf.target_words * (1 + tolerance):
+            word_issues.append(f"[{leaf.id}]《{leaf.title}》字数超出：目标约 {leaf.target_words}，实际 {actual}")
+            word_fix_ids.append(leaf.id)
 
     invalidation_text = ""
     if state.invalidation:
@@ -51,17 +47,21 @@ def body_review_node(state: BidState) -> dict:
         body=body,
     )).output
 
+    leaf_ids = {l.id for l in outline.leaves()}
+    fix_ids = sorted({i for i in report.problem_sections if i in leaf_ids} | set(word_fix_ids))
     issues = list(report.issues) + word_issues
-    passed = report.passed and not word_issues
+    passed = report.passed and not word_issues and not fix_ids
     rounds = state.body_review_rounds + 1
     report_path = d / f"body_review_round_{rounds}.md"
     report_path.write_text(
         f"# 正文审核 第 {rounds} 轮\n\n结论：{'通过' if passed else '不通过'}\n\n"
-        "## 问题清单\n" + ("\n".join(f"- {i}" for i in issues) or "- 无"),
+        "## 问题清单\n" + ("\n".join(f"- {i}" for i in issues) or "- 无") +
+        "\n\n## 待修复小节\n" + ("\n".join(f"- {i}" for i in fix_ids) or "- 无"),
         encoding="utf-8",
     )
     return {
         "body_review_passed": passed,
         "body_feedback": "；".join(issues),
+        "body_fix_sections": fix_ids,
         "body_review_rounds": rounds,
     }

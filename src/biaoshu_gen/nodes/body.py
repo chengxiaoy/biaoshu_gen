@@ -1,11 +1,13 @@
-"""节点 5：逐章生成技术方案正文。"""
+"""节点 5：按三级小节并发生成技术方案正文；回环时只重生成有问题的小节。"""
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from ..config import get_settings
 from ..kb import KnowledgeBase
 from ..models import make_agent, run_sync
 from ..prompts.body import SYSTEM, build_user_prompt
-from ..schemas import Outline, SectionBody, from_yaml_file
+from ..schemas import Outline, OutlineNode, SectionBody, from_yaml_file
 from ..state import BidState, run_dir
 
 
@@ -22,23 +24,74 @@ def _outline_for_use(state: BidState) -> Outline:
     return state.outline
 
 
+def _tree_text(outline: Outline) -> str:
+    """全书目录的紧凑渲染（正文 prompt 的上下文）。"""
+    lines: list[str] = []
+
+    def walk(node: OutlineNode, depth: int) -> None:
+        indent = "  " * depth
+        note = f"（约 {node.target_words} 字）" if not node.children and node.target_words else ""
+        lines.append(f"{indent}{node.id or '-'} {node.title}{note}")
+        for c in node.children:
+            walk(c, depth + 1)
+
+    for s in outline.sections:
+        walk(s, 0)
+    return "\n".join(lines)
+
+
+def _leaf_file(d: Path, leaf: OutlineNode) -> Path:
+    return d / f"{_safe_name(leaf.id or 'sec')}-{_safe_name(leaf.title)}.md"
+
+
 def body_node(state: BidState) -> dict:
     outline = _outline_for_use(state)
     d = run_dir(state) / "05_body"
     d.mkdir(parents=True, exist_ok=True)
     kb = KnowledgeBase.load(Path(state.kb_dir))
     facts_text = state.facts.model_dump_json(indent=2) if state.facts else ""
+    leaves = outline.leaves()
+
+    # 回环修复：只重生成有问题的小节；fix id 在当前目录中不存在（目录被改过）则整体重生成
+    leaf_by_id = {l.id: l for l in leaves}
+    fix_ids = [i for i in state.body_fix_sections if i in leaf_by_id]
+    if state.body_fix_sections and not fix_ids:
+        fix_ids = []
+    targets = [leaf_by_id[i] for i in fix_ids] if fix_ids else leaves
+
+    tree = _tree_text(outline)
     agent = make_agent(SectionBody, SYSTEM)
-    parts: list[str] = []
-    for i, sec in enumerate(outline.sections, 1):
-        snippets = kb.search(sec.title + " " + " ".join(sec.key_points))
+
+    def gen(leaf: OutlineNode) -> tuple[OutlineNode, SectionBody]:
+        snippets = kb.search(f"{leaf.title} {leaf.description}")
         kb_text = "\n\n".join(f"【{c.source.name}】\n{c.text}" for c in snippets) or "（无）"
-        result: SectionBody = run_sync(agent, build_user_prompt(
-            title=sec.title, target_words=sec.target_words, key_points=sec.key_points,
-            facts=facts_text, kb=kb_text, feedback=state.body_feedback,
+        result = run_sync(agent, build_user_prompt(
+            sec_id=leaf.id, title=leaf.title, description=leaf.description,
+            target_words=leaf.target_words, tree=tree, facts=facts_text, kb=kb_text,
+            feedback=state.body_feedback if leaf.id in fix_ids else "",
         )).output
-        (d / f"{i:02d}-{_safe_name(sec.title)}.md").write_text(result.content, encoding="utf-8")
-        parts.append(f"# {result.title}\n\n{result.content}")
+        return leaf, result
+
+    with ThreadPoolExecutor(max_workers=get_settings().body_concurrency) as ex:
+        results = list(ex.map(gen, targets))
+    for leaf, res in results:
+        _leaf_file(d, leaf).write_text(res.content, encoding="utf-8")
+
+    # body.md 由目录树拼装：# 一级 / ## 二级 / ### 三级 + 叶子正文
+    parts: list[str] = []
+
+    def emit(node: OutlineNode, level: int) -> None:
+        heading = "#" * min(level + 1, 4)
+        if not node.children:
+            f = _leaf_file(d, node)
+            parts.append(f"{heading} {node.title}\n\n{f.read_text(encoding='utf-8')}")
+        else:
+            parts.append(f"{heading} {node.title}")
+            for c in node.children:
+                emit(c, level + 1)
+
+    for s in outline.sections:
+        emit(s, 0)
     body_md = d / "body.md"
     body_md.write_text("\n\n".join(parts), encoding="utf-8")
-    return {"body_md_path": str(body_md), "body_feedback": ""}
+    return {"body_md_path": str(body_md), "body_feedback": "", "body_fix_sections": []}

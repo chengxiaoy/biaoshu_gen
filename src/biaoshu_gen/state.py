@@ -33,6 +33,7 @@ class BidState(BaseModel):
     # 05_body
     body_md_path: str = ""
     body_feedback: str = ""           # body_review 给 body 的回环意见
+    body_fix_sections: list[str] = [] # 需修复的三级小节 id（回环时只重生成这些小节）
     body_review_rounds: int = 0
     body_review_passed: bool = False
 

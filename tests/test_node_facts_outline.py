@@ -29,6 +29,12 @@ def _no_llu_factory():
     return make
 
 
+def _five_flat_sections() -> list[dict]:
+    """满足 outline 节点质量门槛（≥3 章、≥5 叶）的假目录。"""
+    return [{"id": str(i), "title": t} for i, t in enumerate(
+        ["总体方案", "实施组织", "质量保障", "培训方案", "售后服务"], 1)]
+
+
 def test_facts_existing_yaml_wins(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     state = BidState(run_id="run-1")
@@ -62,23 +68,21 @@ def test_outline_existing_yaml_wins(tmp_path: Path, monkeypatch):
     assert updates["outline"].sections[0].title == "总体方案"
 
 
-def test_outline_generates_with_template_context(tmp_path: Path, monkeypatch):
+def test_outline_prompt_excludes_template(tmp_path: Path, monkeypatch):
+    """feedback#1：outline 不参考响应模板——模板中不含技术方案格式要求。"""
     monkeypatch.chdir(tmp_path)
     tpl = tmp_path / "template.md"
     tpl.write_text("# 模板\n- 技术方案\n", encoding="utf-8")
     state = BidState(run_id="run-1", template_md_path=str(tpl))
     captured = {}
 
-    # pydantic-ai 1.107.5 适配：单一 output_type 工厂，无条件返回 ModelResponse
     def make(output_type, system_prompt, retries=2):
         async def fn(messages, info: AgentInfo):
             captured["last_prompt"] = _last_user_content(messages)
             tool_name = info.output_tools[0].name if info.output_tools else "final_result"
             return ModelResponse(parts=[ToolCallPart(
                 tool_name=tool_name,
-                args=json.dumps({"sections": [
-                    {"title": "总体方案"}, {"title": "实施组织"}, {"title": "服务承诺"},
-                ], "total_words": 500}),
+                args=json.dumps({"sections": _five_flat_sections(), "total_words": 500}),
             )])
         return Agent(model=FunctionModel(fn), output_type=output_type,
                      system_prompt=system_prompt, retries=retries)
@@ -86,7 +90,7 @@ def test_outline_generates_with_template_context(tmp_path: Path, monkeypatch):
 
     updates = outline_mod.outline_node(state)
     assert updates["outline"].sections[0].title == "总体方案"
-    assert "# 模板" in captured["last_prompt"]        # 模板上下文进入 prompt
+    assert "# 模板" not in captured["last_prompt"]     # 模板内容不得进入 outline prompt
     assert (run_dir(state) / "04_outline.yaml").exists()
 
 
@@ -104,9 +108,7 @@ def test_outline_prefers_edited_facts_yaml(tmp_path: Path, monkeypatch):
             tool_name = info.output_tools[0].name if info.output_tools else "final_result"
             return ModelResponse(parts=[ToolCallPart(
                 tool_name=tool_name,
-                args=json.dumps({"sections": [
-                    {"title": "总体方案"}, {"title": "实施组织"}, {"title": "服务承诺"},
-                ], "total_words": 500}),
+                args=json.dumps({"sections": _five_flat_sections(), "total_words": 500}),
             )])
         return Agent(model=FunctionModel(fn), output_type=output_type,
                      system_prompt=system_prompt, retries=retries)
@@ -129,9 +131,7 @@ def test_outline_falls_back_to_state_facts(tmp_path: Path, monkeypatch):
             tool_name = info.output_tools[0].name if info.output_tools else "final_result"
             return ModelResponse(parts=[ToolCallPart(
                 tool_name=tool_name,
-                args=json.dumps({"sections": [
-                    {"title": "总体方案"}, {"title": "实施组织"}, {"title": "服务承诺"},
-                ], "total_words": 500}),
+                args=json.dumps({"sections": _five_flat_sections(), "total_words": 500}),
             )])
         return Agent(model=FunctionModel(fn), output_type=output_type,
                      system_prompt=system_prompt, retries=retries)
@@ -143,13 +143,14 @@ def test_outline_falls_back_to_state_facts(tmp_path: Path, monkeypatch):
 
 def test_outline_sanitize_meta_leak():
     from biaoshu_gen.nodes.outline import _sanitize
-    from biaoshu_gen.schemas import Outline, OutlineSection
+    from biaoshu_gen.schemas import Outline, OutlineNode
 
     o = Outline(sections=[
-        OutlineSection(title="项目理解分析报告……此处命名为：项目理解与总体建设思路，请以最终输出为准。下面重新输出干净的标题列表。"),
-        OutlineSection(title="项目理解与总体建设思路"),
-        OutlineSection(title="实施组织" * 15),      # 超长标题 -> 截断
-        OutlineSection(title="培训方案"),
+        OutlineNode(id="1", title="项目理解分析报告……此处命名为：项目理解与总体建设思路，请以最终输出为准。下面重新输出干净的标题列表。",
+                    children=[OutlineNode(id="1.1", title="子节")]),   # 父节点泄漏 -> 整个子树剔除
+        OutlineNode(id="2", title="项目理解与总体建设思路"),
+        OutlineNode(id="3", title="实施组织" * 15),      # 超长标题 -> 截断
+        OutlineNode(id="4", title="培训方案"),
     ])
     s = _sanitize(o)
     titles = [x.title for x in s.sections]

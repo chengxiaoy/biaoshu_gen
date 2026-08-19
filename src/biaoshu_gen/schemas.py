@@ -52,10 +52,22 @@ class GlobalFacts(BaseModel):
     extra: list[str] = Field(default_factory=list)
 
 
-class OutlineSection(BaseModel):
+class OutlineNode(BaseModel):
+    """三级提纲节点：一级章 / 二级节 / 三级小节。
+
+    无 children 的节点即叶子（三级小节），叶子带 target_words 作为正文生成与字数校验单位。
+    id 形如 "1"、"1.1"、"1.1.1"。
+    """
+    id: str = ""
     title: str
-    target_words: int = 500
-    key_points: list[str] = Field(default_factory=list)
+    description: str = ""                      # 写作要点（简短）
+    target_words: int = 0                      # 仅叶子节点使用
+    children: list["OutlineNode"] = Field(default_factory=list)
+
+    def leaves(self) -> list["OutlineNode"]:
+        if not self.children:
+            return [self]
+        return [leaf for c in self.children for leaf in c.leaves()]
 
 
 class Outline(BaseModel):
@@ -64,8 +76,11 @@ class Outline(BaseModel):
     注意：不能用 default_factory——pydantic v2 默认不校验默认值，
     模型省略该字段时会静默得到空列表（实测踩坑）。
     """
-    sections: list[OutlineSection] = Field(min_length=1)
+    sections: list[OutlineNode] = Field(min_length=1)
     total_words: int = 0
+
+    def leaves(self) -> list[OutlineNode]:
+        return [leaf for s in self.sections for leaf in s.leaves()]
 
 
 class SectionBody(BaseModel):
@@ -76,6 +91,7 @@ class SectionBody(BaseModel):
 class BodyReviewReport(BaseModel):
     passed: bool
     issues: list[str] = Field(default_factory=list)
+    problem_sections: list[str] = Field(default_factory=list)   # 有问题的三级小节 id 列表
 
 
 class ParseResult(BaseModel):
