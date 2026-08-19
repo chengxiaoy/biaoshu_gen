@@ -2,7 +2,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,14 +11,30 @@ class Settings(BaseSettings):
         env_file=".env", extra="ignore", populate_by_name=True,
     )
 
-    # DeepSeek（PydanticAI 非 harness 节点）。兼容 DEEPSEEK_API_KEY 与 DEEPSEEK_APIKEY 两种命名，
-    # 前者优先（.env 里常写作 DEEPSEEK_APIKEY，避免 key 落空导致鉴权失败）。
-    deepseek_api_key: str = Field(
+    # PydanticAI 非 harness 节点的 LLM（OpenAI 兼容端点，如 OpenRouter / DeepSeek）。
+    # 优先读 .env 通用三件套 API_KEY/MODEL_NAME/BASE_URL；兼容 DEEPSEEK_* 旧命名。
+    llm_api_key: str = Field(
         default="",
-        validation_alias=AliasChoices("DEEPSEEK_API_KEY", "DEEPSEEK_APIKEY"),
+        validation_alias=AliasChoices("API_KEY", "DEEPSEEK_API_KEY", "DEEPSEEK_APIKEY"),
     )
-    deepseek_model: str = "deepseek-chat"
-    deepseek_base_url: str = "https://api.deepseek.com"
+    llm_model: str = Field(
+        default="deepseek-chat",
+        validation_alias=AliasChoices("MODEL_NAME", "DEEPSEEK_MODEL"),
+    )
+    llm_base_url: str = Field(
+        default="https://api.deepseek.com",
+        validation_alias=AliasChoices("BASE_URL", "DEEPSEEK_BASE_URL"),
+    )
+
+    @field_validator("llm_base_url")
+    @classmethod
+    def _strip_completions_path(cls, v: str) -> str:
+        """兼容 .env 里写完整端点（…/v1/chat/completions）的情况：OpenAI SDK 只接受 base_url。"""
+        for suffix in ("/chat/completions", "/completions"):
+            if v.endswith(suffix):
+                return v[: -len(suffix)]
+        return v
+
     # harness 节点走 claude-agent-sdk，继承本机 ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN，无需配置
 
     data_dir: Path = Path("data")
