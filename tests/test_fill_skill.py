@@ -1,0 +1,67 @@
+"""fill_skill 单测：以带下划线填空/下划线字符/无空白的合成模板验证填写语义。"""
+from pathlib import Path
+
+from docx import Document
+
+from biaoshu_gen.fill_skill import (
+    fill_blank, fill_cell, find_para, insert_picture_after, replace_in_para,
+)
+
+# 1x1 透明 PNG（构造插图用，无需 PIL）
+_PNG1 = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+         b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+         b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+
+
+def _make_template(path: Path) -> Path:
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("项目名称：")
+    blank = p.add_run("        ")
+    blank.underline = True                       # (a) 带下划线的空白 run
+    p2 = d.add_paragraph()
+    p2.add_run("投标人（签章）：")
+    p2.add_run("＿＿＿＿＿＿")                   # (b) 下划线字符 run
+    p3 = d.add_paragraph()
+    p3.add_run("日期：")                         # (c) 无空白无下划线
+    t = d.add_table(rows=2, cols=2)
+    t.cell(0, 0).text = "名称"
+    d.save(path)
+    return path
+
+
+def test_fill_blank_on_underlined_blank_run(tmp_path: Path):
+    d = Document(str(_make_template(tmp_path / "t.docx")))
+    fill_blank(d, "项目名称：", "演示项目")
+    p = find_para(d, "项目名称：")
+    assert p.text == "项目名称：演示项目"
+    assert any(r.text == "演示项目" and r.underline for r in p.runs)   # 值落在线上且保留下划线
+
+
+def test_fill_blank_on_underscore_run(tmp_path: Path):
+    d = Document(str(_make_template(tmp_path / "t.docx")))
+    fill_blank(d, "投标人（签章）：", "测试公司")
+    p = find_para(d, "投标人（签章）：")
+    assert p.text == "投标人（签章）：测试公司＿＿"                     # 替换线内并留余线，不附加线后
+
+
+def test_fill_blank_inserts_underlined_run_when_no_blank(tmp_path: Path):
+    d = Document(str(_make_template(tmp_path / "t.docx")))
+    fill_blank(d, "日期：", "2026-08-20")
+    p = find_para(d, "日期：")
+    assert "2026-08-20" in p.text
+    assert any("2026-08-20" in r.text and r.underline for r in p.runs)  # 插入的 run 自带下划线
+
+
+def test_replace_and_cell_and_picture(tmp_path: Path):
+    path = _make_template(tmp_path / "t.docx")
+    img = tmp_path / "lic.png"
+    img.write_bytes(_PNG1)
+    d = Document(str(path))
+    replace_in_para(d, "日期：", "日期", "签署日期")
+    assert find_para(d, "签署日期：").text.startswith("签署日期")
+    fill_cell(d, 0, 1, 1, "1 套")
+    assert d.tables[0].rows[1].cells[1].paragraphs[0].text == "1 套"
+    insert_picture_after(d, "项目名称：", str(img), caption="附：证照")
+    assert len(d.inline_shapes) == 1
+    assert any("附：证照" in p.text for p in d.paragraphs)

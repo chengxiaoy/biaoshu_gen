@@ -157,3 +157,39 @@ def test_outline_sanitize_meta_leak():
     assert titles[0] == "项目理解与总体建设思路"
     assert all("重新输出" not in t and "此处命名" not in t for t in titles)
     assert max(len(t) for t in titles) <= 40
+
+
+def test_facts_prompt_includes_template_tables(tmp_path: Path, monkeypatch, fake_agent_factory):
+    """facts 阶段读响应模板表格，template_fields 提炼进入 prompt 与产物。"""
+    monkeypatch.chdir(tmp_path)
+    from docx import Document
+    tpl = run_dir(BidState(run_id="run-1")) / "02_template" / "标书模板.docx"
+    tpl.parent.mkdir(parents=True, exist_ok=True)
+    d = Document()
+    d.add_paragraph("项目名称：＿＿＿")
+    t = d.add_table(rows=1, cols=2)
+    t.cell(0, 0).text = "项目编号"
+    t.cell(0, 1).text = "HBYC-2026-005"
+    d.save(tpl)
+    state = BidState(run_id="run-1", template_docx_path=str(tpl))
+    captured = {}
+
+    def make(output_type, system_prompt, retries=2):
+        from pydantic_ai import Agent
+        from pydantic_ai.messages import ModelResponse, ToolCallPart
+        from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+        async def fn(messages, info: AgentInfo):
+            captured["last_prompt"] = _last_user_content(messages)
+            tool_name = info.output_tools[0].name if info.output_tools else "final_result"
+            return ModelResponse(parts=[ToolCallPart(
+                tool_name=tool_name,
+                args=json.dumps({"schedule": "90 天",
+                                 "template_fields": {"项目编号": "HBYC-2026-005"}}))])
+        return Agent(model=FunctionModel(fn), output_type=output_type,
+                     system_prompt=system_prompt, retries=retries)
+    monkeypatch.setattr(facts_mod, "make_agent", make)
+
+    updates = facts_mod.facts_node(state)
+    assert "HBYC-2026-005" in captured["last_prompt"]        # 模板表格内容进入 prompt
+    assert updates["facts"].template_fields["项目编号"] == "HBYC-2026-005"

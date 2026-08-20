@@ -54,6 +54,8 @@ class GlobalFacts(BaseModel):
     company_name: str = ""       # 企业/投标人名称
     legal_person: str = ""       # 法定代表人
     credit_code: str = ""        # 统一社会信用代码
+    # 响应模板中提炼的待填信息（facts 阶段预置：项目名称/编号/采购计划备案号/采购人等）
+    template_fields: dict[str, str] = Field(default_factory=dict)
 
 
 class OutlineNode(BaseModel):

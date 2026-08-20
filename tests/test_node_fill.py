@@ -116,5 +116,6 @@ def test_prepare_agent_workspace_base_inputs(tmp_path: Path, monkeypatch):
     (tmp_path / "extra.yaml").write_text("e: 1", encoding="utf-8")
     ws = prepare_agent_workspace(state, "06_fill/forms", [
         (tmp_path / "extra.yaml", "extra.yaml")])
-    for name in ("tender.md", "invalidation.yaml", "标书模板.docx", "kb.md", "extra.yaml"):
+    for name in ("tender.md", "invalidation.yaml", "标书模板.docx", "kb.md", "extra.yaml",
+                 "fill_skill.py"):
         assert (ws / name).exists(), name

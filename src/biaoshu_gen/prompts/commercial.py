@@ -18,7 +18,12 @@ TEMPLATE = """工作区文件：
 - 满足 invalidation.yaml 中关于格式/签字/盖章的要求
 
 完成后文件必须存在且非空。
-- 图片处理：需要插图（营业执照/资质证书/业绩佐证等）时，用 python-docx 将 kb.md 中列出的图片文件**实际插入**文档对应位置（add_picture），不要只写路径；仍**禁止读取/查看图片内容**（会超出消息缓冲），依据文件名判断是否需要插入
+- **工具优先**：工作区已放置 fill_skill.py（表格填写/下划线填空/插图原语，前缀锚定免逐段探查）。
+  优先 `from fill_skill import fill_blank, fill_cell, replace_in_para, insert_picture_after` 使用；
+  下划线空白一律用 fill_blank（值填*在线上*，不会附加到下划线之后）
+- **取值优先级**：项目名称/编号等取 facts.yaml 的 template_fields；企业名称/法人/信用代码取
+  facts.yaml 的 company_name/legal_person/credit_code；其余资质/案例/人员/业绩只引用 kb.md 实有内容
+- 图片处理：需要插图（营业执照/资质证书/业绩佐证等）时用 insert_picture_after **实际插入**，不要只写路径；仍**禁止读取/查看图片内容**（会超出消息缓冲），依据文件名判断是否需要插入
 - 格式保持：填写时**不得删除/隐藏模板中的下划线（＿＿＿）、表格线、签字/盖章占位**等原有格式元素，保持模板原格式
 """
 

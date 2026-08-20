@@ -35,6 +35,18 @@ def _find_run_dir(cwd: Path) -> Path | None:
     return None
 
 
+def _debug_file_for(run_dir: Path, cwd: Path) -> str:
+    """各 harness 节点独立调试日志：run/harness_debug/<工作区相对路径>.log。"""
+    try:
+        rel = cwd.relative_to(run_dir)
+        stem = "_".join(rel.parts) if rel.parts else "root"
+    except ValueError:
+        stem = cwd.name or "root"
+    d = run_dir / "harness_debug"
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d / f"{stem}.log")
+
+
 async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
     from claude_agent_sdk import ClaudeAgentOptions, query
 
@@ -46,11 +58,11 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
     base_url = s.llm_base_url.rstrip("/")
     if base_url.endswith("/v1"):
         base_url = base_url[: -len("/v1")]
-    # claude agent 调试日志落盘到 run 根目录（feedbacks：设置 debug-file）
+    # claude agent 调试日志：各节点独立文件，便于分节点分析（feedbacks）
     extra_args: dict = {}
     run_dir = _find_run_dir(cwd)
     if run_dir is not None:
-        extra_args["debug-file"] = str(run_dir / "harness_debug.log")
+        extra_args["debug-file"] = _debug_file_for(run_dir, cwd)
     options = ClaudeAgentOptions(
         cwd=str(cwd),
         max_turns=max_turns,
@@ -132,7 +144,8 @@ def prepare_workspace(run_dir: Path, stage_subdir: str,
 def prepare_agent_workspace(state, subdir: str,
                             extra_inputs: list[tuple[Path, Path | str]] | None = None) -> Path:
     """填充/审核类 harness 节点的标准工作区：
-    基础输入 tender.md + invalidation.yaml + 可选 标书模板.docx，附加调用方输入，并生成 kb.md。"""
+    基础输入 tender.md + invalidation.yaml + 可选 标书模板.docx，附加调用方输入，生成 kb.md，
+    并投放 fill_skill.py（表格填写/下划线填空/插图原语，供 harness 直接 import）。"""
     from .kb import KnowledgeBase
     from .state import run_dir
 
@@ -143,5 +156,10 @@ def prepare_agent_workspace(state, subdir: str,
         inputs.append((Path(state.template_docx_path), "标书模板.docx"))
     inputs.extend([(Path(p), n) for p, n in (extra_inputs or [])])
     ws = prepare_workspace(run_dir(state), subdir, inputs)
+    skill_target = ws / "fill_skill.py"
+    if not skill_target.exists():
+        skill_src = Path(__file__).with_name("fill_skill.py")
+        if skill_src.exists():
+            shutil.copyfile(skill_src, skill_target)
     KnowledgeBase.load(Path(state.kb_dir)).dump_summary(ws / "kb.md")
     return ws

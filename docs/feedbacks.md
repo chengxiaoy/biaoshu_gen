@@ -55,3 +55,7 @@ JSON格式要求：
 - [x] 在商务响应文件填充时，请依据事实填充，不要编造（commercial prompt：承诺与 facts 一致，资质/案例/人员/业绩只能引用 kb.md 实有内容，缺失留空或注〔待补〕）
 - [x] 在进行填写表格类文件时，请勿删除下划线，同时保持原有格式（fill_forms/commercial/deviation：不得删除/隐藏下划线、表格线、签字/盖章占位，保持模板原格式）
 - [x] 为harness节点中的 claude code agent 设置日志 extra_args={"debug-file": "/path/to/your/debug.log"}（harness._query_sdk 自动定位 run 目录并设置 debug-file 到 run/harness_debug.log） 
+- [x] harness 节点的debug 日志路径不对，注意各harness节点的debug日志应该区分开，修复该问题，并阅读debug日志文件，分析各个harness节点执行慢效率不高的原因和问题（已按节点分文件 harness_debug/<工作区>.log；慢因分析：fill 阶段 80% 时间耗在 harness 逐段探查模板段落/run 下标与试错，实际填写是确定性 python-docx 操作——已用 fill_skill 前缀锚定原语消除探查）
+- [x] 在抽取 facts 阶段，就应该阅读响应模板表格部分，提炼出需要的各类信息和名称或者编号，并预置在facts.yaml文件中（facts 节点读取 02_template/标书模板.docx 表格，提炼入 GlobalFacts.template_fields）
+- [x] 在填写表格时，优先使用facts.yaml 设置的企业信息和名称（三 fill prompt 明确取值优先级：template_fields/企业资料 > metadata > kb）
+- [x] 当前fill阶段耗时较长…为填写表格/填空/插入图片 的skill…（已封装 src/biaoshu_gen/fill_skill.py：前缀锚定 fill_blank/fill_cell/replace_in_para/insert_picture_after/WEBP 转码；fill_blank 修复"值附加在下划线之后"——优先填带下划线空白 run/替换下划线字符 run 留余线/复制格式插入带下划线 run；合成模板单测 4 项通过；prepare_agent_workspace 自动投放 skill 到三个 fill 工作区并写入 prompt）
