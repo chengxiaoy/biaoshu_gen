@@ -6,8 +6,8 @@ TEMPLATE = """工作区文件：
 - {current}：当前标书草稿 docx（待修改）
 - review_report.md：审核意见（问题清单，以此为准逐条修订）
 
-依据材料已附于本 prompt 末尾（facts/invalidation/scoring/草稿可填点地图），
-**禁止逐个读文件探查**；确需核对再读一次对应文件。
+facts/invalidation/scoring 已附于本 prompt 末尾；草稿结构用步骤 1 的 dump_fill_points 一次获取，
+**不要逐个 Read 探查**；确需核对再读一次对应文件。
 
 任务：按审核意见逐条修改草稿，产出新版本 {output}。
 
