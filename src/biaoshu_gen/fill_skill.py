@@ -18,6 +18,17 @@ from docx.text.paragraph import Paragraph
 
 UNDERLINE_CHARS = set("＿＿___―—-") - set("")  # 全角/半角下划线
 
+# 标签之后的合法边界：分隔符/括号/空白/段末/下划线字符（防 "投标人" 误中 "投标人地址"）
+_BOUNDARY_CHARS = set("：:（）() \t") | UNDERLINE_CHARS
+
+
+def _has_fill_slot(p: Paragraph) -> bool:
+    """段落是否真实存在下划线填空位（下划线空白 run 或下划线字符 run）；无则跳过不硬插。"""
+    if any(r.text and not r.text.strip() and _is_underlined(r) for r in p.runs):
+        return True
+    return any((r.text or "").strip() and set((r.text or "").strip()) <= UNDERLINE_CHARS
+               for r in p.runs)
+
 
 def _is_underlined(run) -> bool:
     rPr = run._element.rPr
@@ -71,12 +82,24 @@ def fill_blank(doc, prefix: str, value: str) -> Paragraph:
 
 
 def fill_all_blanks(doc, prefix: str, value: str) -> int:
-    """把**所有**以 prefix 开头的段落的填空线都填上 value，返回填写段数（预填已知值用）。"""
+    """把**所有**以 prefix 开头的段落的填空线都填上 value，返回填写段数（预填已知值用）。
+
+    两道护栏（区别于 blank op 的 fill_blank，预填宁可少填也不可错填）：
+    - 标签边界：prefix 之后须是分隔符/括号/空白/段末，避免 "投标人" 误中 "投标人地址"；
+    - 空位门槛：段落须真实存在下划线填空位，无空位段落不硬插值（防 "投标人地址：无" 被塞值）。
+    """
     n = 0
     for p in doc.paragraphs:
-        if p.text.strip().startswith(prefix):
-            _fill_blank_in_para(p, value)
-            n += 1
+        text = p.text.strip()
+        if not text.startswith(prefix):
+            continue
+        rest = text[len(prefix):]
+        if rest and rest[0] not in _BOUNDARY_CHARS:
+            continue
+        if not _has_fill_slot(p):
+            continue
+        _fill_blank_in_para(p, value)
+        n += 1
     return n
 
 

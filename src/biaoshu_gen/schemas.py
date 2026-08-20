@@ -100,6 +100,20 @@ class BodyReviewReport(BaseModel):
     problem_sections: list[str] = Field(default_factory=list)   # 有问题的三级小节 id 列表
 
 
+class AspectReview(BaseModel):
+    """review 单项（废标扣分/事实一致性/引用/材料/格式/模板结构）审核结论。"""
+    name: str
+    passed: bool
+    note: str = ""
+
+
+class ReviewReport(BaseModel):
+    """review 节点结构化输出（PydanticAI 单次调用）。"""
+    passed: bool
+    aspects: list[AspectReview] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
+
+
 def to_yaml_file(model: BaseModel, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

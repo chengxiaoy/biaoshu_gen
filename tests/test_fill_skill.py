@@ -4,8 +4,8 @@ from pathlib import Path
 from docx import Document
 
 from biaoshu_gen.fill_skill import (
-    dump_fill_points, fill_blank, fill_cell, find_para, insert_picture_after,
-    replace_in_para, run_fill_plan,
+    dump_fill_points, fill_all_blanks, fill_blank, fill_cell, find_para,
+    insert_picture_after, replace_in_para, run_fill_plan,
 )
 
 # 1x1 透明 PNG（构造插图用，无需 PIL）
@@ -29,6 +29,47 @@ def _make_template(path: Path) -> Path:
     t.cell(0, 0).text = "名称"
     d.save(path)
     return path
+
+
+def _make_boundary_template(path: Path) -> Path:
+    """含 投标人：/投标人（签章）：/投标人地址：/日期：无 四段，覆盖标签边界与空位两种误填。"""
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("投标人：")
+    b = p.add_run("        ")
+    b.underline = True                       # 空白 run
+    p2 = d.add_paragraph()
+    p2.add_run("投标人（签章）：")
+    p2.add_run("＿＿＿＿＿＿")                # 下划线字符 run
+    p3 = d.add_paragraph()
+    p3.add_run("投标人地址：")
+    b3 = p3.add_run("        ")
+    b3.underline = True
+    p4 = d.add_paragraph()
+    p4.add_run("日期：无")                    # 无空位
+    d.save(path)
+    return path
+
+
+def test_fill_all_blanks_stops_at_label_boundary(tmp_path: Path):
+    """前缀匹配须停在标签边界：投标人 命中 投标人：/投标人（签章）：，不得误中 投标人地址。"""
+    d = Document(str(_make_boundary_template(tmp_path / "t.docx")))
+    n = fill_all_blanks(d, "投标人", "测试公司")
+    assert n == 2
+    ps = [p.text for p in d.paragraphs]
+    assert any(p == "投标人：测试公司" for p in ps)
+    assert any(p.startswith("投标人（签章）：测试公司") for p in ps)
+    addr = next(p for p in ps if p.startswith("投标人地址"))
+    assert "测试公司" not in addr            # 地址段未被触碰
+
+
+def test_fill_all_blanks_does_not_inject_into_slotless_para(tmp_path: Path):
+    """无填空位的段落不硬插值（防 '投标人地址：无' 被塞入公司名）。"""
+    d = Document(str(_make_boundary_template(tmp_path / "t.docx")))
+    n = fill_all_blanks(d, "日期", "2026-08-20")
+    assert n == 0
+    p = next(p for p in d.paragraphs if p.text.startswith("日期"))
+    assert p.text == "日期：无"              # 原文未变，未插入 run
 
 
 def test_fill_blank_on_underlined_blank_run(tmp_path: Path):

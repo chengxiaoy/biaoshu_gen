@@ -20,6 +20,19 @@ SECTION_KEYWORDS: dict[str, tuple[str, ...]] = {
     "deviation": ("偏离表", "偏离"),
 }
 
+# 已知值字段 -> 模板中可能出现的标签同义词。
+# 配合 fill_all_blanks 的标签边界护栏（:40-41），同义词不会误中 地址/电话 等邻近字段：
+# 匹配须到分隔符/括号/段末为止，故 "投标人" 命中 投标人：/投标人（签章）：，不命中 投标人地址：。
+FIELD_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "项目名称": ("项目名称",),
+    "项目编号": ("项目编号",),
+    "采购计划备案号": ("采购计划备案号",),
+    "采购人名称": ("采购人名称",),
+    "投标人": ("投标人", "投标人名称", "投标单位", "报价单位"),
+    "法定代表人": ("法定代表人", "法人代表"),
+    "统一社会信用代码": ("统一社会信用代码", "信用代码"),
+}
+
 # 共享 prompt 后缀：取值优先级 + 预填提示（三节点统一，代码侧追加，避免三份 prompt 各自维护）
 VALUE_PRIORITY = """- **取值优先级**：项目名称/编号/备案号/采购人等取 facts.yaml 的 template_fields（其次 metadata.yaml）；
   企业名称/法人/信用代码取 facts.yaml 的 company_name/legal_person/credit_code"""
@@ -37,30 +50,29 @@ def load_facts(state: BidState) -> GlobalFacts:
 def prefill_known(doc: Document, state: BidState) -> list[str]:
     """在已打开的模板文档上预填确定值（项目/编号/备案号/投标人/法人/信用代码）。
 
-    返回已填字段摘要（如 "项目名称×3"），供 prompt 告知 harness 勿重复填写。
+    值侧来自 facts（template_fields + 企业资料）与 metadata，标签侧走 FIELD_SYNONYMS
+    逐字段扫描；返回已填字段摘要（如 "项目名称×3"），供 prompt 告知 harness 勿重复填写。
     """
     facts = load_facts(state)
     tf = facts.template_fields
     md = state.metadata
-    pairs: list[tuple[str, str]] = []
-
-    def add(labels: tuple[str, ...], value: str) -> None:
-        if value:
-            pairs.extend((lb, value) for lb in labels)
-
-    add(("项目名称",), tf.get("项目名称") or (md.project_name if md else ""))
-    add(("项目编号",), tf.get("项目编号") or (md.project_no if md else ""))
-    add(("采购计划备案号",), tf.get("采购计划备案号", ""))
-    add(("采购人名称",), tf.get("采购人名称", ""))
-    add(("投标人",), facts.company_name)          # 覆盖 投标人（签章）/投标人名称/投标人（盖单位章）
-    add(("法定代表人",), facts.legal_person)
-    add(("统一社会信用代码",), facts.credit_code)
-
+    values: dict[str, str] = {
+        "项目名称": tf.get("项目名称") or (md.project_name if md else ""),
+        "项目编号": tf.get("项目编号") or (md.project_no if md else ""),
+        "采购计划备案号": tf.get("采购计划备案号", ""),
+        "采购人名称": tf.get("采购人名称", ""),
+        "投标人": facts.company_name,
+        "法定代表人": facts.legal_person,
+        "统一社会信用代码": facts.credit_code,
+    }
     summary: list[str] = []
-    for label, value in pairs:
-        n = fill_all_blanks(doc, label, value)
-        if n:
-            summary.append(f"{label}×{n}")
+    for field, synonyms in FIELD_SYNONYMS.items():
+        value = values[field]
+        if not value:
+            continue
+        total = sum(fill_all_blanks(doc, syn, value) for syn in synonyms)
+        if total:
+            summary.append(f"{field}×{total}")
     return summary
 
 
