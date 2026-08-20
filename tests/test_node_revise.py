@@ -37,6 +37,7 @@ def test_prompt_references_map_and_env():
                           env="环境说明：python 是 /x/py.exe")
     assert "_map.txt" in p and "grep" in p
     assert "不要自己重新 dump" in p
+    assert "禁止分多轮小脚本" in p               # 检查也要合并成一个脚本一次跑完
     assert "标书草稿_v1.docx" in p and "标书草稿_v2.md" in p
     assert "/x/py.exe" in p                      # env 段落在 prompt 开头
 
