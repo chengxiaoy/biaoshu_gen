@@ -7,7 +7,7 @@
 
 Python 3.11+ · poetry · LangGraph（单一状态图 + SqliteSaver 断点续跑）·
 PydanticAI（结构化输出节点，OpenAI 兼容端点：OpenRouter / DeepSeek 等）·
-Claude Code SDK（harness 文件操作节点，继承本机 ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN 智谱网关环境）
+Claude Code SDK（harness 文件操作节点，ANTHROPIC_* 环境由 .env 三件套派生注入）
 
 ## 安装
 
@@ -32,7 +32,7 @@ poetry run biaoshu parse      # 招标解析（按目录分节阅读）→ 01_pa
 poetry run biaoshu template   # 响应模板抽取（harness）→ 02_template/
 poetry run biaoshu facts      # 全局事实 → 03_facts.yaml（可人工编辑）
 poetry run biaoshu outline    # 技术方案三级目录 → 04_outline.yaml（可人工编辑）
-poetry run biaoshu body       # 按三级小节并发生成正文（并发数 body_concurrency=2）
+poetry run biaoshu body       # 按三级小节并发生成正文（并发数 BODY_CONCURRENCY，默认 6）
                              #   + 审核检验（≤2 轮回环，仅重写有问题的小节）→ 05_body/
 poetry run biaoshu fill       # 三表并行填写（harness）→ 06_fill/
 poetry run biaoshu assemble   # 拼装草稿 → 07_draft/标书草稿_v1.docx
@@ -46,7 +46,7 @@ poetry run biaoshu status     # 查看进度
 ## 真实模型端到端测试（验收用）
 
 不花 LLM 成本的单元测试见下节；本节是**接入真实模型与真实 harness 的完整验收流程**
-（已在 Windows 11 + OpenRouter `deepseek/deepseek-v4-flash-0731` + 本机智谱网关环境跑通）。
+（已在 Windows 11 + OpenRouter `deepseek/deepseek-v4-flash-0731` 跑通）。
 
 ### 1. 配置 `.env`（通用三件套，任何 OpenAI 兼容端点）
 
@@ -57,8 +57,9 @@ BASE_URL=https://openrouter.ai/api/v1     # 写完整 …/chat/completions 也�
 ```
 
 - 兼容旧命名 `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` / `DEEPSEEK_BASE_URL`（`API_KEY` 优先）
-- harness 节点不需要配置：Claude Code SDK 子进程直接继承本机
-  `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` 环境变量
+- harness 节点不需要单独配置：Claude Code SDK 子进程的 `ANTHROPIC_BASE_URL` /
+  `ANTHROPIC_AUTH_TOKEN` / 模型均由 .env 三件套派生注入
+  （`setting_sources=[]`，会覆盖本机继承的 `ANTHROPIC_*` 环境变量）
 - 模型选型提示：免费/flash 档模型在大结构化输出上偶发字段遗漏或指令泄漏，
   代码已内置防护（必填校验重试、标题清洗、少章重试、瞬态网络指数退避重试），
   但**质量要求高的场景建议用更强模型**（如 deepseek-chat 级别）
@@ -104,9 +105,10 @@ poetry run pytest        # 无 LLM 成本（假模型 + mock harness）
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `API_KEY` / `MODEL_NAME` / `BASE_URL` | — | LLM 三件套（必填） |
-| `BODY_CONCURRENCY` | 2 | 正文按三级小节并发生成的并发数 |
+| `HARNESS_MODEL` | —（跟随 `MODEL_NAME`） | harness 节点独立模型；额度紧张时指向免费档避免 402 |
+| `BODY_CONCURRENCY` | 6 | 正文按三级小节并发生成的并发数 |
 | `BODY_REVIEW_MAX_ROUNDS` | 2 | 正文审核回环上限 |
 | `REVISE_MAX_ROUNDS` | 2 | 审核→修改回环上限 |
-| `WORD_TOLERANCE` | 0.2 | 小节字数容差（±20%） |
+| `WORD_TOLERANCE` | 0.5 | 小节字数容差（±50%） |
 | `KB_TOP_K` | 5 | 知识库检索片段数 |
 | `HARNESS_MAX_TURNS` | 100 | harness 节点（Claude SDK）最大轮次 |
