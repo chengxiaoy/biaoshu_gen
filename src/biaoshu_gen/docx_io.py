@@ -128,6 +128,64 @@ def copy_docx(src: Path, dest: Path) -> DocumentType:
     return Document(str(dest))
 
 
+@dataclass
+class DocxBlockRange:
+    """标题区间：锚标题 + 其管辖的 body 子元素（到下一同级/更高级标题前，不含 sectPr）。"""
+    title: str
+    level: int
+    elements: list
+
+
+def docx_block_ranges(doc: DocumentType) -> list[DocxBlockRange]:
+    """按标题把文档切成区间（assemble 分段定位/替换的基础）。"""
+    ranges: list[DocxBlockRange] = []
+    cur: DocxBlockRange | None = None
+    for child in doc.element.body.iterchildren():
+        tag = child.tag.split("}")[-1]
+        if tag == "sectPr":
+            continue                        # 分节属性固定在 body 尾部，不参与区间
+        level = 0
+        if tag == "p":
+            para = Paragraph(child, doc)
+            m = _HEADING_RE.match((para.style.name or "").strip())
+            if m and para.text.strip():
+                if cur is not None:
+                    ranges.append(cur)
+                cur = DocxBlockRange(para.text.strip(), int(m.group(1)), [child])
+                continue
+        if cur is None:
+            cur = DocxBlockRange("(前言)", 0, [])
+        cur.elements.append(child)
+    if cur is not None:
+        ranges.append(cur)
+    return ranges
+
+
+def replace_elements(old_elements: list, new_elements: list) -> None:
+    """就地替换：new_elements（来自其他文档，自动深拷贝）替换 old_elements，保持原位置。"""
+    import copy as _copy
+
+    if not old_elements:
+        return
+    anchor = old_elements[0]
+    for el in new_elements:
+        anchor.addprevious(_copy.deepcopy(el))
+    for el in old_elements:
+        el.getparent().remove(el)
+
+
+def append_elements_before_sectpr(doc: DocumentType, elements: list) -> None:
+    """把 elements（外部文档元素，深拷贝）追加到 body 末尾（sectPr 之前）。"""
+    import copy as _copy
+
+    sect_pr = doc.element.body.sectPr
+    for el in elements:
+        if sect_pr is not None:
+            sect_pr.addprevious(_copy.deepcopy(el))
+        else:
+            doc.element.body.append(_copy.deepcopy(el))
+
+
 _DEVIATION_KEYWORDS = ("偏离表", "偏离情况", "商务偏离", "技术偏离", "负偏离", "正偏离", "偏离说明")
 
 
@@ -154,10 +212,4 @@ def template_has_deviation_table(tpl_path: Path) -> bool:
         return False
     if template_has_section(tpl_path, "偏离"):
         return True
-    doc = Document(str(tpl_path))
-    for tb in doc.tables:
-        for row in tb.rows[:3]:
-            cells = " ".join(c.text for c in row.cells)
-            if ("招标文件要求" in cells or "招标要求" in cells) and "响应" in cells:
-                return True
     return False
