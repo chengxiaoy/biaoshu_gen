@@ -22,10 +22,6 @@ class BidState(BaseModel):
     scoring: ScoringStandards | None = None
     invalidation: InvalidationItems | None = None
 
-    # 02_template
-    template_md_path: str = ""
-    template_report_path: str = ""
-
     # 03/04
     facts: GlobalFacts | None = None
     outline: Outline | None = None
@@ -51,8 +47,6 @@ class BidState(BaseModel):
     review_report_path: str = ""
     review_passed: bool = False
     revision_round: int = 0
-
-    errors: list[str] = []
 
 
 def run_dir(state: BidState) -> Path:

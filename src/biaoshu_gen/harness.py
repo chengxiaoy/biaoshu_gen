@@ -36,9 +36,13 @@ def _find_run_dir(cwd: Path) -> Path | None:
 
 
 def _debug_file_for(run_dir: Path, cwd: Path) -> str:
-    """各 harness 节点独立调试日志：run/harness_debug/<工作区相对路径>.log。"""
+    """各 harness 节点独立调试日志：run/harness_debug/<工作区相对路径>.log。
+
+    必须返回**绝对路径**：CLI 子进程 cwd 是工作区，相对路径会解析到错误位置导致日志不落盘。
+    """
+    run_dir = run_dir.resolve()
     try:
-        rel = cwd.relative_to(run_dir)
+        rel = cwd.resolve().relative_to(run_dir)
         stem = "_".join(rel.parts) if rel.parts else "root"
     except ValueError:
         stem = cwd.name or "root"
@@ -53,12 +57,7 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
     s = get_settings()
     # harness 节点可用独立模型（HARNESS_MODEL），缺省跟随 llm_model。
     model = s.harness_model or s.llm_model
-    # claude CLI 在 ANTHROPIC_BASE_URL 后追加 /v1/messages；OpenAI 风格 base（…/v1）需去尾 /v1，
-    # 使同一份 .env BASE_URL 对两种协议都成立（OpenRouter: …/api/v1/messages 为 Anthropic 兼容端点）。
-    base_url = s.llm_base_url.rstrip("/")
-    if base_url.endswith("/v1"):
-        base_url = base_url[: -len("/v1")]
-    # claude agent 调试日志：各节点独立文件，便于分节点分析（feedbacks）
+    # claude agent 调试日志：各节点独立文件（run/harness_debug/<工作区>.log，绝对路径）
     extra_args: dict = {}
     run_dir = _find_run_dir(cwd)
     if run_dir is not None:
@@ -72,7 +71,7 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
         extra_args=extra_args,
         # 全面使用 .env 配置（BASE_URL/API_KEY/MODEL_NAME），覆盖本机继承的 ANTHROPIC_* 环境变量。
         env={
-            "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_BASE_URL": s.anthropic_base_url,
             "ANTHROPIC_AUTH_TOKEN": s.llm_api_key,
             "ANTHROPIC_MODEL": model,
             "ANTHROPIC_DEFAULT_OPUS_MODEL": model,

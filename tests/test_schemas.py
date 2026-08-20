@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from biaoshu_gen.schemas import (
-    GlobalFacts, InvalidationItem, Outline, OutlineNode, TocMap,
+    GlobalFacts, InvalidationItem, Outline, OutlineNode,
     from_yaml_file, to_yaml_file,
 )
 
@@ -41,11 +41,6 @@ def test_outline_node_tree():
     leaves = tree.leaves()
     assert len(leaves) == 1 and leaves[0].id == "1.1.1" and leaves[0].target_words == 500
 
-
-def test_toc_map_parse():
-    tm = TocMap.model_validate({"assignments": [
-        {"index": 1, "title": "评标办法", "categories": ["scoring", "invalidation"]}]})
-    assert tm.assignments[0].categories == ["scoring", "invalidation"]
 
 
 def test_outline_requires_sections():

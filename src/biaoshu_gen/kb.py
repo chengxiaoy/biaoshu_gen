@@ -13,6 +13,15 @@ _DOCX_EXTS = {".docx"}
 _PDF_EXTS = {".pdf"}
 _CHUNK_SIZE = 800
 
+# 目录级知识库缓存：同一 run 内多次 load（body/fill/审核）不重复解析 docx/pdf
+_LOAD_CACHE: dict[str, tuple[float, "KnowledgeBase"]] = {}
+
+
+def _fingerprint(dir_path: Path) -> tuple[float, int]:
+    files = list(dir_path.rglob("*")) if dir_path.exists() else []
+    mtime = max((f.stat().st_mtime for f in files if f.is_file()), default=0.0)
+    return mtime, len(files)
+
 
 def _pdf_to_markdown(path: Path) -> str:
     """PDF 文本提取（pypdf；扫描件需先 OCR，本 POC 仅处理文本层 PDF）。"""
@@ -40,8 +49,13 @@ class KnowledgeBase:
 
     @classmethod
     def load(cls, dir: Path) -> "KnowledgeBase":
+        key = str(dir.resolve())
+        fp = _fingerprint(dir)
+        if _LOAD_CACHE.get(key, (None, None))[0] == fp[0] and _LOAD_CACHE.get(key, (None, None))[1] == fp[1]:
+            return _LOAD_CACHE[key][1]
         kb = cls()
         if not dir.exists():
+            _LOAD_CACHE[key] = (fp[0], kb)
             return kb
         for p in sorted(dir.rglob("*")):
             if not p.is_file() or p.name.startswith("."):
@@ -58,6 +72,7 @@ class KnowledgeBase:
                     continue
             elif p.suffix.lower() in {".jpg", ".jpeg", ".png"}:
                 kb.images.append(p)
+        _LOAD_CACHE[key] = (fp[0], kb)
         return kb
 
     def _add_text(self, source: Path, text: str) -> None:
@@ -77,16 +92,19 @@ class KnowledgeBase:
             return []
         from .config import get_settings
         top_k = top_k or get_settings().kb_top_k
-        corpus = [[t for t in jieba.lcut(c.text) if t.strip()] for c in self.chunks]
-        scores = BM25Okapi(corpus).get_scores([t for t in jieba.lcut(query) if t.strip()])
+        scores = self._index().get_scores([t for t in jieba.lcut(query) if t.strip()])
         ranked = sorted(zip(scores, self.chunks), key=lambda x: x[0], reverse=True)
         return [c for s, c in ranked[:top_k] if s > 0]
 
+    def _index(self) -> BM25Okapi:
+        """BM25 索引惰性构建一次，避免每个查询重建（jieba 分词全库最贵）。"""
+        if getattr(self, "_bm25", None) is None:
+            corpus = [[t for t in jieba.lcut(c.text) if t.strip()] for c in self.chunks]
+            self._bm25 = BM25Okapi(corpus)
+        return self._bm25
+
     def image_paths(self) -> list[Path]:
         return list(self.images)
-
-    def all_files(self) -> list[Path]:
-        return list(self.files)
 
     def dump_summary(self, path: Path) -> Path:
         """写给 harness 节点读的知识库摘要：文本块 + 图片绝对路径清单。"""

@@ -3,7 +3,7 @@ from pathlib import Path
 from docx import Document
 
 from biaoshu_gen.docx_io import (
-    DocxSection, append_docx, copy_docx, docx_to_markdown, docx_to_sections, markdown_to_docx,
+    DocxSection, copy_docx, docx_to_markdown, docx_to_sections, markdown_to_docx,
 )
 
 
@@ -57,27 +57,6 @@ def test_markdown_to_docx_headings_and_list(tmp_path: Path):
     assert any("List" in s for s in styles)
 
 
-def test_append_docx_merges_tables_and_paragraphs(tmp_path: Path):
-    src = tmp_path / "src.docx"
-    _make_tender_docx(src)
-    dest = Document()
-    dest.add_paragraph("前言")
-    append_docx(dest, src)
-    texts = [p.text for p in dest.paragraphs]
-    assert "前言" in texts and "第一章 招标公告" in texts
-    assert len(dest.tables) == 1 and dest.tables[0].cell(0, 0).text == "名称"
-
-
-def test_append_docx_keeps_sectpr_last(tmp_path: Path):
-    src = tmp_path / "src.docx"
-    _make_tender_docx(src)
-    dest = Document()
-    dest.add_paragraph("前言")
-    append_docx(dest, src)
-    body_children = list(dest.element.body.iterchildren())
-    tags = [c.tag.split("}")[-1] for c in body_children]
-    assert tags[-1] == "sectPr"
-    assert "p" in tags and "tbl" in tags[:-1]
 
 
 def test_copy_docx(tmp_path: Path):
@@ -99,23 +78,18 @@ def test_markdown_to_docx_style_fallback():
     assert "要点一" in texts and "步骤一" in texts and "某标题" in texts
 
 
-def test_template_has_deviation_table(tmp_path: Path):
-    from biaoshu_gen.docx_io import template_has_deviation_table
+def test_template_has_section(tmp_path: Path):
+    from biaoshu_gen.docx_io import template_has_section
 
     no = tmp_path / "no.docx"
     d = Document()
     d.add_paragraph("投标函")
     d.save(no)
-    assert template_has_deviation_table(no) is False
+    assert template_has_section(no, "偏离") is False
 
     yes = tmp_path / "yes.docx"
     d = Document()
-    d.add_heading("偏离表", level=2)
-    t = d.add_table(rows=1, cols=3)
-    t.cell(0, 0).text = "序号"
-    t.cell(0, 1).text = "招标文件要求"
-    t.cell(0, 2).text = "投标响应"
+    d.add_paragraph("偏离表")
     d.save(yes)
-    assert template_has_deviation_table(yes) is True
-
-    assert template_has_deviation_table(tmp_path / "missing.docx") is False
+    assert template_has_section(yes, "偏离") is True
+    assert template_has_section(tmp_path / "missing.docx", "偏离") is False

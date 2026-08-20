@@ -73,19 +73,26 @@ def execute_stage(graph, run_id: str, stage: str | None, initial_input: dict | N
         graph.invoke(None, config, interrupt_after=stop_nodes)
 
 
-def _backup_checkpoint(run_dir: Path, stage: str) -> None:
-    """阶段完成后备份 checkpoint 到 checkpoints/<stage>.sqlite（支持选择性重跑）。"""
-    ck_dir = run_dir / "checkpoints"
-    ck_dir.mkdir(parents=True, exist_ok=True)
-    src = sqlite3.connect(run_dir / "checkpoint.sqlite")
-    dst = sqlite3.connect(ck_dir / f"{stage}.sqlite")
+def _sqlite_backup(src_path: Path, dst_path: Path) -> None:
+    """sqlite 安全复制（backup API 处理 WAL；目标存在则覆盖）。"""
+    src = sqlite3.connect(src_path)
+    dst = sqlite3.connect(dst_path)
     try:
         with dst:
-            src.backup(dst)          # sqlite backup API 处理 WAL，安全复制
+            src.backup(dst)
     finally:
         dst.close()
         src.close()
-    # 注意：不能在此删除 WAL——graph 连接可能仍持有该文件（Windows 文件锁）。
+
+
+def _backup_checkpoint(run_dir: Path, stage: str) -> None:
+    """阶段完成后备份 checkpoint 到 checkpoints/<stage>.sqlite（支持选择性重跑）。
+
+    注意：备份后不能删 WAL——graph 连接可能仍持有该文件（Windows 文件锁）。
+    """
+    ck_dir = run_dir / "checkpoints"
+    ck_dir.mkdir(parents=True, exist_ok=True)
+    _sqlite_backup(run_dir / "checkpoint.sqlite", ck_dir / f"{stage}.sqlite")
 
 
 def _restore_checkpoint(run_dir: Path, stage: str) -> None:
@@ -93,14 +100,7 @@ def _restore_checkpoint(run_dir: Path, stage: str) -> None:
     ck = run_dir / "checkpoints" / f"{stage}.sqlite"
     if not ck.exists():
         raise typer.BadParameter(f"没有 {stage} 阶段的 checkpoint 备份（{ck}）")
-    src = sqlite3.connect(ck)
-    dst = sqlite3.connect(run_dir / "checkpoint.sqlite")
-    try:
-        with dst:
-            src.backup(dst)
-    finally:
-        dst.close()
-        src.close()
+    _sqlite_backup(ck, run_dir / "checkpoint.sqlite")
     _drop_wal(run_dir)
 
 

@@ -28,8 +28,4 @@ def extract_template_node(state: BidState) -> dict:
         cwd=ws,
         expected_outputs=[template_md, report_md, tpl_docx],
     ))
-    return {
-        "template_md_path": str(template_md),
-        "template_report_path": str(report_md),
-        "template_docx_path": str(tpl_docx),
-    }
+    return {"template_docx_path": str(tpl_docx)}

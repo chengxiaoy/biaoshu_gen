@@ -29,7 +29,7 @@ def test_load_and_search(tmp_path: Path):
 
 def test_images_registered_not_searched(tmp_path: Path):
     kb = KnowledgeBase.load(_make_kb_dir(tmp_path))
-    assert kb.image_paths() == [Path(kb.all_files()[0]).parent / "营业执照.jpg"] or \
+    assert kb.image_paths() == [Path(kb.files[0]).parent / "营业执照.jpg"] or \
            [p.name for p in kb.image_paths()] == ["营业执照.jpg"]
     assert all("fake" != h.text for h in kb.search("营业执照"))
 

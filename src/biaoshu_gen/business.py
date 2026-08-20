@@ -1,7 +1,8 @@
 """投标人企业资料：表格填写节点所需字段，缺失时 mock 占位并回写 03_facts.yaml。"""
 import sys
 
-from .schemas import GlobalFacts, from_yaml_file, to_yaml_file
+from .fill_context import load_facts
+from .schemas import GlobalFacts, to_yaml_file
 from .state import BidState, run_dir
 
 # 缺失时的 mock 占位值（明显可识别，供用户人工替换）
@@ -15,8 +16,7 @@ _MOCK_BUSINESS: dict[str, str] = {
 def ensure_business_fields(state: BidState) -> GlobalFacts:
     """确保 03_facts.yaml 含企业/法人/信用代码字段；缺失则写入 mock 占位并提示用户。"""
     yaml_path = run_dir(state) / "03_facts.yaml"
-    facts = from_yaml_file(GlobalFacts, yaml_path) if yaml_path.exists() else (
-        state.facts or GlobalFacts())
+    facts = load_facts(state)
     changed = False
     for field, mock in _MOCK_BUSINESS.items():
         if not getattr(facts, field, ""):

@@ -37,8 +37,6 @@ TEMPLATE = """工作区文件：
 2. errors 非空时只修正报错条目重跑（通常一次收敛）；产物为 {output}
 
 要求：
-- **取值优先级**：项目名称/编号/备案号/采购人等取 facts.yaml 的 template_fields（其次 metadata.yaml）；
-  企业名称/法人/信用代码取 facts.yaml 的 company_name/legal_person/credit_code
 - 逐条核对 invalidation.yaml：签字/盖章/附件/格式要求必须满足或预留位置
 - 图片：img 用 kb.md 中的绝对路径，**实际插入**（picture op）而非写路径；禁止读取/查看图片内容
 - 格式保持：不得删除/隐藏模板中的下划线、表格线、签字/盖章占位

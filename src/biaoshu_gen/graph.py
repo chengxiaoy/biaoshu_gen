@@ -12,20 +12,23 @@ from .state import BidState
 @dataclass(frozen=True)
 class StageSpec:
     members: tuple[str, ...]
-    end_nodes: tuple[str, ...]
+    end_nodes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.end_nodes:
+            object.__setattr__(self, "end_nodes", self.members)
 
 
 STAGES = {
-    "parse":    StageSpec(("parse_tender",), ("parse_tender",)),
-    "template": StageSpec(("extract_template",), ("extract_template",)),
-    "facts":    StageSpec(("facts",), ("facts",)),
-    "outline":  StageSpec(("outline",), ("outline",)),
+    "parse":    StageSpec(("parse_tender",)),
+    "template": StageSpec(("extract_template",)),
+    "facts":    StageSpec(("facts",)),
+    "outline":  StageSpec(("outline",)),
     "body":     StageSpec(("body", "body_review"), ("body_review",)),
-    "fill":     StageSpec(("fill_forms", "deviation_table", "commercial"),
-                          ("fill_forms", "deviation_table", "commercial")),
-    "assemble": StageSpec(("assemble",), ("assemble",)),
-    "review":   StageSpec(("review",), ("review",)),
-    "revise":   StageSpec(("revise",), ("revise",)),
+    "fill":     StageSpec(("fill_forms", "deviation_table", "commercial")),
+    "assemble": StageSpec(("assemble",)),
+    "review":   StageSpec(("review",)),
+    "revise":   StageSpec(("revise",)),
 }
 STAGE_ORDER = ["parse", "template", "facts", "outline", "body",
                "fill", "assemble", "review", "revise"]

@@ -36,7 +36,7 @@ def _make_fake_agent(overrides: dict, default: dict, output_type, system_prompt:
 
 @pytest.fixture
 def fake_agent_factory():
-    """用法：monkeypatch.setattr(node_mod, 'make_agent', fake_agent_factory({ParseResult: {...}}))"""
+    """用法：monkeypatch.setattr(node_mod, 'make_agent', fake_agent_factory({SomeType: {...}}))"""
     def _factory(overrides: dict, default: dict | None = None):
         def make(output_type, system_prompt, retries=2):
             return _make_fake_agent(overrides, default or {}, output_type,

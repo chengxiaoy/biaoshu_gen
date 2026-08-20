@@ -8,14 +8,15 @@ from pathlib import Path
 from ..docx_io import docx_to_markdown
 from ..models import make_agent, run_sync
 from ..prompts.facts import SYSTEM, build_user_prompt
-from ..schemas import GlobalFacts, from_yaml_file, to_yaml_file
+from ..schemas import GlobalFacts, to_yaml_file
 from ..state import BidState, run_dir
 
 
 def facts_node(state: BidState) -> dict:
     yaml_path = run_dir(state) / "03_facts.yaml"
     if yaml_path.exists():                       # 用户已编辑（或上游已产出）-> 不调 LLM
-        return {"facts": from_yaml_file(GlobalFacts, yaml_path)}
+        from ..fill_context import load_facts
+        return {"facts": load_facts(state)}
     template_md = ""
     if state.template_docx_path and Path(state.template_docx_path).exists():
         template_md = docx_to_markdown(Path(state.template_docx_path))

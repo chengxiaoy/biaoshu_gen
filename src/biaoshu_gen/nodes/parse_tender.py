@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
-from ..docx_io import DocxSection, docx_to_markdown, docx_to_sections
+from ..docx_io import DocxSection, docx_to_sections, sections_to_markdown
 from ..models import make_agent, run_sync
 from ..prompts.parse_tender import SYSTEM_EXTRACT, build_extract_prompt
 from ..schemas import (
@@ -116,26 +116,26 @@ def parse_tender_node(state: BidState) -> dict:
     # ① 目录路由：代码侧关键词匹配（含上级章节继承），零 LLM 成本
     by_group = classify_sections(sections)
 
-    # ② 分组抽取：每组只拼接本组章节内容
+    # ② 分组抽取：每组只拼接本组章节内容（agent 按组复用一个，批次间复用连接）
     results: dict[str, BaseModel] = {}
     for group, (tp, desc) in GROUPS.items():
         group_sections = [sections[i - 1] for i in by_group[group]]
         if not group_sections:
             results[group] = tp()
             continue
+        agent = make_agent(tp, SYSTEM_EXTRACT)
         objs = [
-            run_sync(make_agent(tp, SYSTEM_EXTRACT),
-                     build_extract_prompt(desc, "\n\n".join(
-                         (f"{'#' * s.level} {s.title}\n\n" if s.level else "") + s.content
-                         for s in batch))).output
+            run_sync(agent, build_extract_prompt(desc, "\n\n".join(
+                (f"{'#' * s.level} {s.title}\n\n" if s.level else "") + s.content
+                for s in batch))).output
             for batch in _batches(group_sections)
         ]
         results[group] = _merge(objs) if len(objs) > 1 else objs[0]
 
-    # ③ 落盘（tender.md 全文 + routing.yaml 路由透明化，供后续 harness 节点使用）
+    # ③ 落盘（tender.md 复用已切好的 sections，不二次解析；routing.yaml 路由透明化）
     d = run_dir(state) / "01_parse"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "tender.md").write_text(docx_to_markdown(Path(state.tender_path)), encoding="utf-8")
+    (d / "tender.md").write_text(sections_to_markdown(sections), encoding="utf-8")
     routing = {g: [f"{i}. {sections[i - 1].title}" for i in idx] for g, idx in by_group.items()}
     (d / "routing.yaml").write_text(
         yaml.safe_dump(routing, allow_unicode=True, sort_keys=False), encoding="utf-8")

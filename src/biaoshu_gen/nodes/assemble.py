@@ -14,7 +14,7 @@ from docx import Document
 
 from ..docx_io import (
     append_elements_before_sectpr, copy_docx, docx_block_ranges,
-    markdown_to_docx, replace_elements,
+    iter_block_items, markdown_to_docx, replace_elements,
 )
 from ..state import BidState, run_dir
 
@@ -50,43 +50,20 @@ def _block_key(block) -> str:
 
 
 def _collect_keys(doc: Document) -> set:
-    from docx.table import Table
-    from docx.text.paragraph import Paragraph
-
-    keys: set = set()
-    for child in doc.element.body.iterchildren():
-        tag = child.tag.split("}")[-1]
-        block = Paragraph(child, doc) if tag == "p" else (Table(child, doc) if tag == "tbl" else None)
-        if block is None:
-            continue
-        key = _block_key(block)
-        if key:
-            keys.add(key)
-    return keys
+    return {key for block in iter_block_items(doc) if (key := _block_key(block))}
 
 
-def _append_docx_dedup(dest: Document, src_path: Path, existing: set) -> None:
+def _append_docx_dedup(dest: Document, src: Document, existing: set) -> None:
     """兜底：整本去重追加（src 中与底稿文本相同的块跳过）。"""
     import copy as _copy
 
-    src = Document(str(src_path))
     sect_pr = dest.element.body.sectPr
-    from docx.table import Table
-    from docx.text.paragraph import Paragraph
-
-    for child in src.element.body.iterchildren():
-        tag = child.tag.split("}")[-1]
-        if tag == "p":
-            block = Paragraph(child, src)
-        elif tag == "tbl":
-            block = Table(child, src)
-        else:
-            continue
+    for block in iter_block_items(src):
         key = _block_key(block)
         if not key or key in existing:
             continue
         existing.add(key)
-        el = _copy.deepcopy(child)
+        el = _copy.deepcopy(block._element)
         if sect_pr is not None:
             sect_pr.addprevious(el)
         else:
@@ -119,13 +96,14 @@ def assemble_node(state: BidState) -> dict:
         markdown_to_docx(doc, "# 技术方案\n\n" + body_md)
 
     # 商务部分 / 偏离表 -> 同锚区间整段替换；底稿无该区间则仅追加该区间；再兜底整本去重
-    for path, keywords in (
-        (state.commercial_docx_path, ("商务部分", "商务")),
-        (state.deviation_docx_path, ("偏离表", "偏离")),
-    ):
+    from ..fill_context import SECTION_KEYWORDS
+
+    for field, key in (("commercial_docx_path", "commercial"), ("deviation_docx_path", "deviation")):
+        path = getattr(state, field)
         if not (path and Path(path).exists()):
             continue
         src = Document(str(path))
+        keywords = SECTION_KEYWORDS[key]
         src_range = _find_range(docx_block_ranges(src), keywords)
         base_range = _find_range(docx_block_ranges(doc), keywords)
         if src_range is not None and base_range is not None:
@@ -135,7 +113,7 @@ def assemble_node(state: BidState) -> dict:
             append_elements_before_sectpr(doc, src_range.elements)
         else:
             doc.add_page_break()
-            _append_docx_dedup(doc, Path(path), _collect_keys(doc))
+            _append_docx_dedup(doc, src, _collect_keys(doc))
     doc.save(str(dest))
 
     (out_dir / "latest.txt").write_text(str(version), encoding="utf-8")

@@ -100,25 +100,6 @@ class BodyReviewReport(BaseModel):
     problem_sections: list[str] = Field(default_factory=list)   # 有问题的三级小节 id 列表
 
 
-class ParseResult(BaseModel):
-    """parse_tender 节点的聚合输出。"""
-    metadata: TenderMetadata
-    requirements: TenderRequirements
-    invalidation: InvalidationItems
-    scoring: ScoringStandards
-
-
-class TocAssignment(BaseModel):
-    """章节分类结果：一个章节可同时属于多组。"""
-    index: int                      # 章节序号（1 起，与 docx_to_sections 顺序一致）
-    title: str
-    categories: list[str] = Field(default_factory=list)   # metadata/requirements/invalidation/scoring 子集，可为空
-
-
-class TocMap(BaseModel):
-    assignments: list[TocAssignment] = Field(default_factory=list)
-
-
 def to_yaml_file(model: BaseModel, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

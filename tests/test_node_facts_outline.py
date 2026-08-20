@@ -68,31 +68,6 @@ def test_outline_existing_yaml_wins(tmp_path: Path, monkeypatch):
     assert updates["outline"].sections[0].title == "总体方案"
 
 
-def test_outline_prompt_excludes_template(tmp_path: Path, monkeypatch):
-    """feedback#1：outline 不参考响应模板——模板中不含技术方案格式要求。"""
-    monkeypatch.chdir(tmp_path)
-    tpl = tmp_path / "template.md"
-    tpl.write_text("# 模板\n- 技术方案\n", encoding="utf-8")
-    state = BidState(run_id="run-1", template_md_path=str(tpl))
-    captured = {}
-
-    def make(output_type, system_prompt, retries=2):
-        async def fn(messages, info: AgentInfo):
-            captured["last_prompt"] = _last_user_content(messages)
-            tool_name = info.output_tools[0].name if info.output_tools else "final_result"
-            return ModelResponse(parts=[ToolCallPart(
-                tool_name=tool_name,
-                args=json.dumps({"sections": _five_flat_sections(), "total_words": 500}),
-            )])
-        return Agent(model=FunctionModel(fn), output_type=output_type,
-                     system_prompt=system_prompt, retries=retries)
-    monkeypatch.setattr(outline_mod, "make_agent", make)
-
-    updates = outline_mod.outline_node(state)
-    assert updates["outline"].sections[0].title == "总体方案"
-    assert "# 模板" not in captured["last_prompt"]     # 模板内容不得进入 outline prompt
-    assert (run_dir(state) / "04_outline.yaml").exists()
-
 
 def test_outline_prefers_edited_facts_yaml(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)

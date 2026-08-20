@@ -42,8 +42,6 @@ def test_extract_template_produces_docx_from_tender(tmp_path: Path, monkeypatch)
     assert (ws / "招标文件.docx").exists()                       # 招标原件入工作区
     assert (ws / "标书模板.docx").exists()                       # 提取出的模板
     assert updates["template_docx_path"] == str(ws / "标书模板.docx")
-    assert updates["template_md_path"] == str(ws / "template.md")
-    assert updates["template_report_path"] == str(ws / "report.md")
     assert "投标文件的格式" in captured["prompt"]
 
 

@@ -32,8 +32,6 @@ TEMPLATE = """工作区文件：
 要求：
 - **严格依据事实填写，不得编造**：承诺与 facts.yaml 一致；资质/案例/人员/业绩只引用 kb.md 实有内容，
   缺失留空或注〔待补〕
-- **取值优先级**：项目名称/编号等取 facts.yaml 的 template_fields；企业名称/法人/信用代码取
-  facts.yaml 的 company_name/legal_person/credit_code
 - 图片用 kb.md 绝对路径**实际插入**（picture op）；禁止读取/查看图片内容
 - 格式保持：不得删除/隐藏下划线、表格线、签字/盖章占位
 """

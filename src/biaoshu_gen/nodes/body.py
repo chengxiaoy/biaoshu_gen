@@ -84,14 +84,15 @@ def body_node(state: BidState) -> dict:
     for leaf, res in results:
         _leaf_file(d, leaf).write_text(res.content, encoding="utf-8")
 
-    # body.md 由目录树拼装：# 一级 / ## 二级 / ### 三级 + 叶子正文
+    # body.md 由目录树拼装：# 一级 / ## 二级 / ### 三级 + 叶子正文（复用内存中的生成结果，不重读磁盘）
+    contents = {leaf.id: res.content for leaf, res in results}
     parts: list[str] = []
 
     def emit(node: OutlineNode, level: int) -> None:
         heading = "#" * min(level + 1, 4)
         if not node.children:
-            f = _leaf_file(d, node)
-            parts.append(f"{heading} {node.title}\n\n{f.read_text(encoding='utf-8')}")
+            content = contents.get(node.id) or _leaf_file(d, node).read_text(encoding="utf-8")
+            parts.append(f"{heading} {node.title}\n\n{content}")
         else:
             parts.append(f"{heading} {node.title}")
             for c in node.children:

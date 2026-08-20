@@ -41,6 +41,13 @@ class Settings(BaseSettings):
                 return v[: -len(suffix)]
         return v
 
+    @property
+    def anthropic_base_url(self) -> str:
+        """claude CLI（Anthropic 协议）用的 base：CLI 自动追加 /v1/messages，
+        OpenAI 风格 base（…/v1）需去尾 /v1（如 OpenRouter 的 …/api/v1/messages）。"""
+        b = self.llm_base_url.rstrip("/")
+        return b[: -len("/v1")] if b.endswith("/v1") else b
+
     # harness 节点走 claude-agent-sdk，继承本机 ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN，无需配置
 
     data_dir: Path = Path("data")

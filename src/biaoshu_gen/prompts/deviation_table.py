@@ -26,8 +26,6 @@ TEMPLATE = """工作区文件：
 2. errors 非空时只修正报错条目重跑；产物为 {output}
 
 要求：
-- **取值优先级**：项目名称/编号等取 facts.yaml 的 template_fields；企业资料取 facts.yaml 的
-  company_name/legal_person/credit_code；投标响应与 facts.yaml 承诺一致，严禁负偏离
 - 格式保持：不得删除/隐藏下划线、表格线；图片用 picture op 实际插入，禁止读取图片内容
 """
 

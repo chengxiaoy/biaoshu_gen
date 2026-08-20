@@ -10,7 +10,7 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 
 
-def _iter_block_items(doc: DocumentType):
+def iter_block_items(doc: DocumentType):
     """按文档真实顺序产出段落与表格。"""
     from docx.oxml.ns import qn
     for child in doc.element.body.iterchildren():
@@ -18,6 +18,9 @@ def _iter_block_items(doc: DocumentType):
             yield Paragraph(child, doc)
         elif child.tag == qn("w:tbl"):
             yield Table(child, doc)
+
+
+_iter_block_items = iter_block_items   # 兼容旧名（docx_to_sections 仍引用）
 
 
 def _table_md(table: Table) -> str:
@@ -68,14 +71,18 @@ def docx_to_sections(path: Path) -> list[DocxSection]:
     return sections
 
 
-def docx_to_markdown(path: Path) -> str:
+def sections_to_markdown(sections: list[DocxSection]) -> str:
     parts: list[str] = []
-    for s in docx_to_sections(path):
+    for s in sections:
         if s.level:
             parts.append("#" * s.level + " " + s.title)
         if s.content:
             parts.append(s.content)
     return "\n\n".join(parts) + "\n"
+
+
+def docx_to_markdown(path: Path) -> str:
+    return sections_to_markdown(docx_to_sections(path))
 
 
 def _add_styled(doc: DocumentType, text: str, style: str):
@@ -104,22 +111,6 @@ def markdown_to_docx(doc: DocumentType, md: str) -> None:
             _add_styled(doc, re.sub(r"^\d+\.\s+", "", s), "List Number")
         else:
             doc.add_paragraph(re.sub(r"\*\*(.+?)\*\*", r"\1", s))
-
-
-def append_docx(dest: DocumentType, src_path: Path) -> None:
-    """把 src 文档 body 的段落/表格深拷贝追加到 dest（跨文档移动需要 deepcopy）。"""
-    import copy as _copy
-
-    src = Document(str(src_path))
-    sect_pr = dest.element.body.sectPr
-    for child in src.element.body.iterchildren():
-        tag = child.tag.split("}")[-1]
-        if tag in ("p", "tbl"):
-            el = _copy.deepcopy(child)
-            if sect_pr is not None:
-                sect_pr.addprevious(el)   # sectPr 必须是 body 最后一个子元素（ECMA-376）
-            else:
-                dest.element.body.append(el)
 
 
 def copy_docx(src: Path, dest: Path) -> DocumentType:
@@ -186,30 +177,9 @@ def append_elements_before_sectpr(doc: DocumentType, elements: list) -> None:
             doc.element.body.append(_copy.deepcopy(el))
 
 
-_DEVIATION_KEYWORDS = ("偏离表", "偏离情况", "商务偏离", "技术偏离", "负偏离", "正偏离", "偏离说明")
-
-
-def template_has_section(tpl_path: Path, keyword: str, table_hint: bool = False) -> bool:
-    """动态判断响应模板中是否存在含 keyword 的部分（扫描段落；table_hint 时含表头）。"""
+def template_has_section(tpl_path: Path, keyword: str) -> bool:
+    """动态判断响应模板中是否存在含 keyword 的段落。"""
     if not tpl_path.exists():
         return False
     doc = Document(str(tpl_path))
-    for p in doc.paragraphs:
-        if keyword in p.text:
-            return True
-    if table_hint:
-        for tb in doc.tables:
-            for row in tb.rows[:3]:
-                cells = " ".join(c.text for c in row.cells)
-                if keyword in cells:
-                    return True
-    return False
-
-
-def template_has_deviation_table(tpl_path: Path) -> bool:
-    """响应模板中是否存在偏离表要求：段落关键词或含"招标…要求+响应"的表头。"""
-    if not tpl_path.exists():
-        return False
-    if template_has_section(tpl_path, "偏离"):
-        return True
-    return False
+    return any(keyword in p.text for p in doc.paragraphs)

@@ -18,6 +18,12 @@ def _fake_run(captured):
     return fake
 
 
+def _patch_fill_harness(monkeypatch, captured, mod=None):
+    """fill 节点经 fill_context.run_fill_node 调用 harness，故 patch 该模块。"""
+    from biaoshu_gen import fill_context
+    monkeypatch.setattr(fill_context, "run_harness_task", _fake_run(captured))
+
+
 def _base_state(tmp_path: Path, monkeypatch) -> BidState:
     monkeypatch.chdir(tmp_path)
     state = BidState(run_id="run-1", kb_dir=str(tmp_path / "kb"))
@@ -59,8 +65,7 @@ def _with_template(tmp_path: Path, monkeypatch, text: str = "偏离表") -> BidS
 def test_three_fill_nodes_isolated_workspaces(tmp_path: Path, monkeypatch):
     state = _with_template(tmp_path, monkeypatch, text="商务部分\n偏离表")
     captured = []
-    for mod in (ff, dev, com):
-        monkeypatch.setattr(mod, "run_harness_task", _fake_run(captured))
+    _patch_fill_harness(monkeypatch, captured)
     u1 = ff.fill_forms_node(state)
     u2 = dev.deviation_table_node(state)
     u3 = com.commercial_node(state)
@@ -100,7 +105,7 @@ def test_commercial_fills_template_with_commercial(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     state = _with_template(tmp_path, monkeypatch, text="商务部分\n业绩证明文件")
     captured = []
-    monkeypatch.setattr(com, "run_harness_task", _fake_run(captured))
+    _patch_fill_harness(monkeypatch, captured)
     updates = com.commercial_node(state)
     assert updates["commercial_docx_path"].endswith("commercial.docx")
     assert len(captured) == 1
@@ -134,7 +139,7 @@ def test_fill_prompts_preinject_context(tmp_path: Path, monkeypatch):
     state = state.model_copy(update={"template_docx_path": str(tpl)})
 
     captured = []
-    monkeypatch.setattr(com, "run_harness_task", _fake_run(captured))
+    _patch_fill_harness(monkeypatch, captured)
     com.commercial_node(state)
     prompt = captured[0][1]
     assert "模板可填点地图" in prompt and "项目名称" in prompt   # 地图已注入
@@ -166,8 +171,11 @@ def test_prefill_known_fills_deterministic_values(tmp_path: Path, monkeypatch):
                   encoding="utf-8")
 
     from biaoshu_gen.fill_context import prefill_known
-    summary = prefill_known(tpl, state)
-    d2 = Document(str(tpl))
+    from docx import Document as D
+    doc = D(str(tpl))
+    summary = prefill_known(doc, state)
+    doc.save(tpl)
+    d2 = D(str(tpl))
     texts = [p.text for p in d2.paragraphs]
     assert "项目名称：演示项目" in texts
     assert "项目编号：DEMO-001" in texts
