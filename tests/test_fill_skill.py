@@ -4,7 +4,8 @@ from pathlib import Path
 from docx import Document
 
 from biaoshu_gen.fill_skill import (
-    fill_blank, fill_cell, find_para, insert_picture_after, replace_in_para,
+    dump_fill_points, fill_blank, fill_cell, find_para, insert_picture_after,
+    replace_in_para, run_fill_plan,
 )
 
 # 1x1 透明 PNG（构造插图用，无需 PIL）
@@ -65,3 +66,29 @@ def test_replace_and_cell_and_picture(tmp_path: Path):
     insert_picture_after(d, "项目名称：", str(img), caption="附：证照")
     assert len(d.inline_shapes) == 1
     assert any("附：证照" in p.text for p in d.paragraphs)
+
+
+def test_run_fill_plan_batch_and_errors(tmp_path: Path):
+    """声明式清单：一次执行多种 op；单条失败收集错误不中断。"""
+    path = _make_template(tmp_path / "t.docx")
+    img = tmp_path / "lic.png"
+    img.write_bytes(_PNG1)
+    plan = [
+        {"op": "blank", "prefix": "项目名称：", "value": "演示项目"},
+        {"op": "cell", "table_header": ["名称"], "row": 1, "col": 1, "value": "1 套"},
+        {"op": "picture", "prefix": "项目名称：", "img": str(img)},
+        {"op": "blank", "prefix": "不存在的段落：", "value": "X"},      # 应报错不中断
+    ]
+    out = tmp_path / "out.docx"
+    errors = run_fill_plan(str(path), str(out), plan)
+    d = Document(str(out))
+    assert find_para(d, "项目名称：").text == "项目名称：演示项目"      # 前三条已生效
+    assert len(d.inline_shapes) == 1
+    assert len(errors) == 1 and "不存在的段落" in errors[0]
+
+
+def test_dump_fill_points(tmp_path: Path):
+    path = _make_template(tmp_path / "t.docx")
+    d = Document(str(path))
+    text = dump_fill_points(d)
+    assert "项目名称" in text and "[T0]" in text and "名称" in text

@@ -14,15 +14,27 @@ TEMPLATE = """工作区文件：
 - 投标响应必须与 facts.yaml 的承诺一致；严禁出现负偏离
 - invalidation.yaml 中被扣分评分的条目必须逐条入表
 
-完成后文件必须存在且非空。
-- **工具优先**：工作区已放置 fill_skill.py（表格填写/下划线填空/插图原语，前缀锚定）。
-  优先 `from fill_skill import fill_blank, fill_cell, insert_picture_after` 使用；下划线空白一律用 fill_blank（值填在线上）
+执行流程（**严格四步一次成型，禁止逐步探查模板**）：
+1. 一条命令拿模板地图（只跑一次）：
+   python -c "import docx; from fill_skill import dump_fill_points; print(dump_fill_points(docx.Document('标书模板.docx')))"
+2. 读取 requirements.yaml / scoring.yaml / facts.yaml / kb.md（各自读一次即可）
+3. 写**一个**驱动脚本：把偏离表逐条响应组织成 PLAN 清单（cell op 按表头定位逐格填写/追加行）后一次运行：
+   from fill_skill import run_fill_plan
+   PLAN = [
+     {"op": "cell", "table_header": ["序号", "招标文件要求"], "row": 1, "col": 0, "value": "1"},
+     {"op": "cell", "table_header": ["序号", "招标文件要求"], "row": 1, "col": 2, "value": "无偏离"},
+     ...
+   ]
+   errors = run_fill_plan('标书模板.docx', '{output}', PLAN)
+   print(errors or 'OK')
+4. errors 非空时只修正报错条目重跑；产物为 {output}
+
+要求：
 - **取值优先级**：项目名称/编号等取 facts.yaml 的 template_fields；企业资料取 facts.yaml 的
-  company_name/legal_person/credit_code；投标响应与 facts.yaml 承诺一致
-- 格式保持：填写时**不得删除/隐藏模板中的下划线（＿＿＿）、表格线**等原有格式元素，保持模板原格式
-- 图片处理：需要插图时用 insert_picture_after **实际插入**；仍**禁止读取/查看图片内容**（会超出消息缓冲），依据文件名判断
+  company_name/legal_person/credit_code；投标响应与 facts.yaml 承诺一致，严禁负偏离
+- 格式保持：不得删除/隐藏下划线、表格线；图片用 picture op 实际插入，禁止读取图片内容
 """
 
 
 def build_user_prompt(output: str) -> str:
-    return TEMPLATE.format(output=output)
+    return TEMPLATE.replace("{output}", output)  # 花括号安全

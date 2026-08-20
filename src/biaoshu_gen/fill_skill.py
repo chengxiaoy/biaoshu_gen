@@ -11,6 +11,7 @@
 import copy as _copy
 import os
 
+from docx import Document
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from docx.text.paragraph import Paragraph
@@ -130,3 +131,70 @@ def insert_picture_after(doc, prefix: str, img: str, width_inch: float = 5.6,
         cp.alignment = 1
         last = cp
     return last
+
+
+# ---------------- 声明式填空清单（一次执行、批量报错，压缩 harness 轮次） ----------------
+
+def find_table(doc, *header_keywords: str) -> int:
+    """按表头关键词定位表格（表头行含全部关键词），返回下标；找不到抛 RuntimeError。"""
+    for i, t in enumerate(doc.tables):
+        head = " ".join(c.text for c in t.rows[0].cells)
+        if all(k in head for k in header_keywords):
+            return i
+    raise RuntimeError(f"找不到表头含 {header_keywords} 的表格")
+
+
+def dump_fill_points(doc) -> str:
+    """一次性输出模板全部可填点地图：段落（下标/文本/是否含填空线）+ 表格（下标/表头）。"""
+    lines = ["== 段落 =="]
+    for i, p in enumerate(doc.paragraphs):
+        t = p.text.strip()
+        if not t:
+            continue
+        has_blank = any(r.text and not r.text.strip() and _is_underlined(r) for r in p.runs) \
+            or any((r.text or "").strip() and set((r.text or "").strip()) <= UNDERLINE_CHARS
+                   for r in p.runs)
+        lines.append(f"[{i}]{'(线)' if has_blank else ''} {t[:50]}")
+    lines.append("== 表格 ==")
+    for i, t in enumerate(doc.tables):
+        head = " | ".join(c.text.strip()[:8] for c in t.rows[0].cells)
+        lines.append(f"[T{i}] {head}  ({len(t.rows)}行)")
+    return "\n".join(lines)
+
+
+def run_fill_plan(template: str, output: str, plan: list[dict]) -> list[str]:
+    """按填空清单一次性执行全部操作；单条失败不中断，返回错误清单供批量修正。
+
+    plan 条目（op 必填）：
+      {"op":"blank","prefix":"项目名称：","value":"X"}                 # 下划线填空
+      {"op":"replace","prefix":"致：","old":"（采购人）","new":"X"}      # 段内替换
+      {"op":"cell","table":0,"row":1,"col":2,"value":"X"}              # 按下标填格
+      {"op":"cell","table_header":["序号","名称"],"row":1,"col":1,...} # 按表头定位填格
+      {"op":"picture","prefix":"备注：","img":"C:/...jpg","width":4.8,"caption":"附：X"}
+      {"op":"append","prefix":"投标人名称：","value":"X"}               # 段末追加（无填空线时）
+    """
+    errors: list[str] = []
+    doc = Document(template)
+    for i, op in enumerate(plan):
+        try:
+            kind = op["op"]
+            if kind == "blank":
+                fill_blank(doc, op["prefix"], op["value"])
+            elif kind == "replace":
+                replace_in_para(doc, op["prefix"], op["old"], op["new"])
+            elif kind == "cell":
+                t = op.get("table")
+                if t is None:
+                    t = find_table(doc, *op["table_header"])
+                fill_cell(doc, int(t), int(op["row"]), int(op["col"]), op["value"])
+            elif kind == "picture":
+                insert_picture_after(doc, op["prefix"], op["img"],
+                                     float(op.get("width", 5.6)), op.get("caption"))
+            elif kind == "append":
+                find_para(doc, op["prefix"]).add_run(op["value"])
+            else:
+                raise RuntimeError(f"未知 op: {kind}")
+        except Exception as e:              # 收集错误继续执行，供一次修正
+            errors.append(f"[{i}] {op.get('op')} {op.get('prefix', op.get('table_header', ''))}: {e}")
+    doc.save(output)
+    return errors

@@ -22,25 +22,37 @@ TEMPLATE = """工作区文件：
 - 资格证明文件：按模板小节填入企业资料与 kb.md 资质，并实际插入相应图片（见图片处理要求）
 - 企业资料若为 mock 占位值（含"待替换"），照填并在交付说明中注明需人工替换
 
+执行流程（**严格四步一次成型，禁止逐步探查模板**）：
+1. 一条命令拿模板地图（只跑一次）：
+   python -c "import docx; from fill_skill import dump_fill_points; print(dump_fill_points(docx.Document('标书模板.docx')))"
+2. 读取 facts.yaml / metadata.yaml / invalidation.yaml / kb.md（各自读一次即可，不要反复读）
+3. 写**一个**驱动脚本：把全部填写/插图组织成 PLAN 清单后一次运行——
+   from fill_skill import run_fill_plan
+   PLAN = [
+     {"op": "blank", "prefix": "项目名称：", "value": "……"},          # 下划线填空（值在线上）
+     {"op": "cell", "table_header": ["序号", "服务期"], "row": 1, "col": 1, "value": "……"},
+     {"op": "replace", "prefix": "致：", "old": "（采购人名称）", "new": "……"},
+     {"op": "picture", "prefix": "备注：", "img": "C:/……jpg", "width": 4.8, "caption": "附：营业执照"},
+     {"op": "append", "prefix": "投标人名称：", "value": "……"},       # 无填空线的段末追加
+   ]
+   errors = run_fill_plan('标书模板.docx', '{output}', PLAN)
+   print(errors or 'OK')
+4. errors 非空时只修正报错条目重跑（通常一次收敛）；产物为 {output}
+
 要求：
-- **工具优先**：工作区已放置 fill_skill.py（表格填写/下划线填空/插图原语，前缀锚定免逐段探查）。
-  优先 `from fill_skill import fill_blank, fill_cell, replace_in_para, insert_picture_after` 使用；
-  下划线空白一律用 fill_blank（值填*在线上*，不会附加到下划线之后），不要自己按下标改 run
 - **取值优先级**：项目名称/编号/备案号/采购人等取 facts.yaml 的 template_fields（其次 metadata.yaml）；
   企业名称/法人/信用代码取 facts.yaml 的 company_name/legal_person/credit_code
 - 逐条核对 invalidation.yaml：签字/盖章/附件/格式要求必须满足或预留位置
-- 完成后文件必须存在且非空
-- 图片处理：需要插图（营业执照/资质证书等）时用 insert_picture_after **实际插入**，不要只写路径；
-  仍**禁止读取/查看图片内容**（会超出消息缓冲），依据文件名判断是否需要插入
-- 格式保持：填写时**不得删除/隐藏模板中的下划线（＿＿＿）、表格线、签字/盖章占位**等原有格式元素，保持模板原格式
+- 图片：img 用 kb.md 中的绝对路径，**实际插入**（picture op）而非写路径；禁止读取/查看图片内容
+- 格式保持：不得删除/隐藏模板中的下划线、表格线、签字/盖章占位
 """
 
 
 def build_user_prompt(output: str, company_name: str = "", legal_person: str = "",
                       credit_code: str = "") -> str:
-    return TEMPLATE.format(
-        output=output,
-        company_name=company_name or "（facts.yaml 缺失）",
-        legal_person=legal_person or "（facts.yaml 缺失）",
-        credit_code=credit_code or "（facts.yaml 缺失）",
-    )
+    # 用 replace 而非 format：正文含 PLAN 字典花括号，format 会误解析
+    return (TEMPLATE
+            .replace("{output}", output)
+            .replace("{company_name}", company_name or "（facts.yaml 缺失）")
+            .replace("{legal_person}", legal_person or "（facts.yaml 缺失）")
+            .replace("{credit_code}", credit_code or "（facts.yaml 缺失）"))

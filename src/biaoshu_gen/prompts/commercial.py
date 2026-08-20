@@ -17,16 +17,30 @@ TEMPLATE = """工作区文件：
   中实际存在的内容，kb.md 中没有的信息不得虚构，缺失处留空或注明"〔待补〕"
 - 满足 invalidation.yaml 中关于格式/签字/盖章的要求
 
-完成后文件必须存在且非空。
-- **工具优先**：工作区已放置 fill_skill.py（表格填写/下划线填空/插图原语，前缀锚定免逐段探查）。
-  优先 `from fill_skill import fill_blank, fill_cell, replace_in_para, insert_picture_after` 使用；
-  下划线空白一律用 fill_blank（值填*在线上*，不会附加到下划线之后）
+执行流程（**严格四步一次成型，禁止逐步探查模板**）：
+1. 一条命令拿模板地图（只跑一次）：
+   python -c "import docx; from fill_skill import dump_fill_points; print(dump_fill_points(docx.Document('标书模板.docx')))"
+2. 读取 facts.yaml / metadata.yaml / kb.md（各自读一次即可）
+3. 写**一个**驱动脚本：把商务部分全部填写/插图组织成 PLAN 清单后一次运行——
+   from fill_skill import run_fill_plan
+   PLAN = [
+     {"op": "cell", "table_header": ["序号", "项目名称"], "row": 1, "col": 1, "value": "……"},
+     {"op": "append", "prefix": "业绩证明文件", "value": "……"},      # 小节下插信息文字
+     {"op": "picture", "prefix": "其他商务文件", "img": "C:/……jpg", "width": 4.8, "caption": "附：资质证书"},
+   ]
+   errors = run_fill_plan('标书模板.docx', '{output}', PLAN)
+   print(errors or 'OK')
+4. errors 非空时只修正报错条目重跑；产物为 {output}
+
+要求：
+- **严格依据事实填写，不得编造**：承诺与 facts.yaml 一致；资质/案例/人员/业绩只引用 kb.md 实有内容，
+  缺失留空或注〔待补〕
 - **取值优先级**：项目名称/编号等取 facts.yaml 的 template_fields；企业名称/法人/信用代码取
-  facts.yaml 的 company_name/legal_person/credit_code；其余资质/案例/人员/业绩只引用 kb.md 实有内容
-- 图片处理：需要插图（营业执照/资质证书/业绩佐证等）时用 insert_picture_after **实际插入**，不要只写路径；仍**禁止读取/查看图片内容**（会超出消息缓冲），依据文件名判断是否需要插入
-- 格式保持：填写时**不得删除/隐藏模板中的下划线（＿＿＿）、表格线、签字/盖章占位**等原有格式元素，保持模板原格式
+  facts.yaml 的 company_name/legal_person/credit_code
+- 图片用 kb.md 绝对路径**实际插入**（picture op）；禁止读取/查看图片内容
+- 格式保持：不得删除/隐藏下划线、表格线、签字/盖章占位
 """
 
 
 def build_user_prompt(output: str) -> str:
-    return TEMPLATE.format(output=output)
+    return TEMPLATE.replace("{output}", output)  # 花括号安全
