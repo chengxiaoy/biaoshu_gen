@@ -14,20 +14,16 @@ TEMPLATE = """工作区文件：
 - 投标响应必须与 facts.yaml 的承诺一致；严禁出现负偏离
 - invalidation.yaml 中被扣分评分的条目必须逐条入表
 
-执行流程（**严格四步一次成型，禁止逐步探查模板**）：
-1. 一条命令拿模板地图（只跑一次）：
-   python -c "import docx; from fill_skill import dump_fill_points; print(dump_fill_points(docx.Document('标书模板.docx')))"
-2. 读取 requirements.yaml / scoring.yaml / facts.yaml / kb.md（各自读一次即可）
-3. 写**一个**驱动脚本：把偏离表逐条响应组织成 PLAN 清单（cell op 按表头定位逐格填写/追加行）后一次运行：
+执行流程（**材料已预注入本 prompt 末尾，禁止再读任何文件探查**；requirements.yaml 可按需读一次）：
+1. 基于 prompt 末尾的【模板可填点地图】与【facts】直接写**一个**驱动脚本（cell op 按表头定位逐格填写）：
    from fill_skill import run_fill_plan
    PLAN = [
      {"op": "cell", "table_header": ["序号", "招标文件要求"], "row": 1, "col": 0, "value": "1"},
      {"op": "cell", "table_header": ["序号", "招标文件要求"], "row": 1, "col": 2, "value": "无偏离"},
-     ...
    ]
    errors = run_fill_plan('标书模板.docx', '{output}', PLAN)
    print(errors or 'OK')
-4. errors 非空时只修正报错条目重跑；产物为 {output}
+2. errors 非空时只修正报错条目重跑；产物为 {output}
 
 要求：
 - **取值优先级**：项目名称/编号等取 facts.yaml 的 template_fields；企业资料取 facts.yaml 的

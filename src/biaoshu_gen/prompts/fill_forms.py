@@ -22,22 +22,19 @@ TEMPLATE = """工作区文件：
 - 资格证明文件：按模板小节填入企业资料与 kb.md 资质，并实际插入相应图片（见图片处理要求）
 - 企业资料若为 mock 占位值（含"待替换"），照填并在交付说明中注明需人工替换
 
-执行流程（**严格四步一次成型，禁止逐步探查模板**）：
-1. 一条命令拿模板地图（只跑一次）：
-   python -c "import docx; from fill_skill import dump_fill_points; print(dump_fill_points(docx.Document('标书模板.docx')))"
-2. 读取 facts.yaml / metadata.yaml / invalidation.yaml / kb.md（各自读一次即可，不要反复读）
-3. 写**一个**驱动脚本：把全部填写/插图组织成 PLAN 清单后一次运行——
+执行流程（**材料已预注入本 prompt 末尾，禁止再读任何文件探查**；invalidation.yaml 可按需读一次）：
+1. 基于 prompt 末尾的【模板可填点地图】与【facts/metadata/图片路径】，直接写**一个**驱动脚本：
    from fill_skill import run_fill_plan
    PLAN = [
      {"op": "blank", "prefix": "项目名称：", "value": "……"},          # 下划线填空（值在线上）
      {"op": "cell", "table_header": ["序号", "服务期"], "row": 1, "col": 1, "value": "……"},
      {"op": "replace", "prefix": "致：", "old": "（采购人名称）", "new": "……"},
-     {"op": "picture", "prefix": "备注：", "img": "C:/……jpg", "width": 4.8, "caption": "附：营业执照"},
+     {"op": "picture", "prefix": "备注：", "img": "<预注入的图片绝对路径>", "width": 4.8, "caption": "附：营业执照"},
      {"op": "append", "prefix": "投标人名称：", "value": "……"},       # 无填空线的段末追加
    ]
    errors = run_fill_plan('标书模板.docx', '{output}', PLAN)
    print(errors or 'OK')
-4. errors 非空时只修正报错条目重跑（通常一次收敛）；产物为 {output}
+2. errors 非空时只修正报错条目重跑（通常一次收敛）；产物为 {output}
 
 要求：
 - **取值优先级**：项目名称/编号/备案号/采购人等取 facts.yaml 的 template_fields（其次 metadata.yaml）；

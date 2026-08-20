@@ -119,3 +119,24 @@ def test_prepare_agent_workspace_base_inputs(tmp_path: Path, monkeypatch):
     for name in ("tender.md", "invalidation.yaml", "标书模板.docx", "kb.md", "extra.yaml",
                  "fill_skill.py"):
         assert (ws / name).exists(), name
+
+
+def test_fill_prompts_preinject_context(tmp_path: Path, monkeypatch):
+    """模板地图/facts/图片路径预注入 prompt，harness 无需读文件探查。"""
+    monkeypatch.chdir(tmp_path)
+    from docx import Document
+    state = _base_state(tmp_path, monkeypatch)
+    tpl = tmp_path / "标书模板.docx"
+    d = Document()
+    d.add_paragraph("项目名称：＿＿＿")
+    d.add_paragraph("商务部分")
+    d.save(tpl)
+    state = state.model_copy(update={"template_docx_path": str(tpl)})
+
+    captured = []
+    monkeypatch.setattr(com, "run_harness_task", _fake_run(captured))
+    com.commercial_node(state)
+    prompt = captured[0][1]
+    assert "模板可填点地图" in prompt and "项目名称" in prompt   # 地图已注入
+    assert "facts.yaml 全文" in prompt and "90 天" in prompt    # facts 已注入
+    assert "营业执照.jpg" in prompt                              # 图片绝对路径已注入

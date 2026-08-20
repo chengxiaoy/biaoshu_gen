@@ -6,6 +6,7 @@
 from pathlib import Path
 
 from ..docx_io import template_has_deviation_table
+from ..fill_context import build_fill_context
 from ..harness import HarnessTask, prepare_agent_workspace, run_harness_task
 from ..prompts.deviation_table import SYSTEM, build_user_prompt
 from ..state import BidState, run_dir
@@ -22,6 +23,8 @@ def deviation_table_node(state: BidState) -> dict:
         (run_dir(state) / "01_parse" / "scoring.yaml", "scoring.yaml"),
         (run_dir(state) / "03_facts.yaml", "facts.yaml")])
     out = ws / "deviation.docx"
-    run_harness_task(HarnessTask(prompt=SYSTEM + "\n\n" + build_user_prompt(str(out)),
-                                 cwd=ws, expected_outputs=[out]))
+    run_harness_task(HarnessTask(
+        prompt=SYSTEM + "\n\n" + build_user_prompt(str(out))
+        + "\n\n" + build_fill_context(state),
+        cwd=ws, expected_outputs=[out]))
     return {"deviation_docx_path": str(out)}

@@ -1,11 +1,12 @@
 """节点 9：商务响应文件（harness 按响应模板格式填写）。
 
 在响应模板副本的"商务部分"中插入信息文字/图片，而非生成后插入；
-模板中无商务部分则跳过。
+模板中无商务部分则跳过。模板地图等**预注入 prompt**，压缩轮次。
 """
 from pathlib import Path
 
 from ..docx_io import template_has_section
+from ..fill_context import build_fill_context
 from ..harness import HarnessTask, prepare_agent_workspace, run_harness_task
 from ..prompts.commercial import SYSTEM, build_user_prompt
 from ..state import BidState, run_dir
@@ -24,6 +25,8 @@ def commercial_node(state: BidState) -> dict:
         (run_dir(state) / "01_parse" / "metadata.yaml", "metadata.yaml"),
         (run_dir(state) / "03_facts.yaml", "facts.yaml")])
     out = ws / "commercial.docx"
-    run_harness_task(HarnessTask(prompt=SYSTEM + "\n\n" + build_user_prompt(str(out)),
-                                 cwd=ws, expected_outputs=[out]))
+    run_harness_task(HarnessTask(
+        prompt=SYSTEM + "\n\n" + build_user_prompt(str(out))
+        + "\n\n" + build_fill_context(state),
+        cwd=ws, expected_outputs=[out]))
     return {"commercial_docx_path": str(out)}
