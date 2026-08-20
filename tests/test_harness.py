@@ -31,6 +31,15 @@ def test_prepare_workspace_overwrites_stale_input(tmp_path: Path):
     assert (ws / "review_report.md").read_text(encoding="utf-8") == "更新后的报告"
 
 
+def test_prepare_workspace_skips_self_copy(tmp_path: Path):
+    """源文件已在工作区内（revise 的草稿 v1 就在 07_draft）：跳过而非 SameFileError。"""
+    ws = prepare_workspace(tmp_path, "07_draft")
+    draft = ws / "标书草稿_v1.docx"
+    draft.write_bytes(b"docx")
+    prepare_workspace(tmp_path, "07_draft", [(draft, draft.name)])     # 不抛异常
+    assert draft.read_bytes() == b"docx"
+
+
 def test_environment_notes_mentions_interpreter():
     from biaoshu_gen.harness import environment_notes
     notes = environment_notes()

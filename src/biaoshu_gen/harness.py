@@ -192,9 +192,12 @@ def prepare_workspace(run_dir: Path, stage_subdir: str,
     ws = run_dir / stage_subdir
     ws.mkdir(parents=True, exist_ok=True)
     for src, name in inputs or []:
+        target = ws / name
+        if src.resolve() == target.resolve():
+            continue                    # 源就在工作区内（如 revise 的草稿 v1），无需复制
         # 输入必须**总是覆盖**为当前状态：曾因"已存在则跳过"把过期 review_report.md
         # 留在工作区，agent 拿旧报告改新稿，白烧几分钟核对草稿结构。
-        shutil.copyfile(src, ws / name)
+        shutil.copyfile(src, target)
     return ws
 
 
