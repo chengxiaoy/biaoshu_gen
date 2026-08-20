@@ -60,8 +60,10 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
     # claude agent 调试日志：各节点独立文件（run/harness_debug/<工作区>.log，绝对路径）
     extra_args: dict = {}
     run_dir = _find_run_dir(cwd)
+    transcript: Path | None = None
     if run_dir is not None:
         extra_args["debug-file"] = _debug_file_for(run_dir, cwd)
+        transcript = run_dir / "harness_debug" / (cwd.resolve().name + ".transcript.log")
     options = ClaudeAgentOptions(
         cwd=str(cwd),
         max_turns=max_turns,
@@ -81,11 +83,47 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
     )
     final = ""
     async for msg in query(prompt=prompt, options=options):
+        if transcript is not None:
+            _log_msg(transcript, msg)
         # claude-agent-sdk 0.2.x 的 ResultMessage 无 .type 字段（type 为 None），
         # 以 dataclass 属性判断：只有 ResultMessage 带 .result 文本
         if hasattr(msg, "result") and isinstance(getattr(msg, "result", None), str):
             final = msg.result or ""
     return final
+
+
+def _log_msg(transcript: Path, msg) -> None:
+    """把 agent 每一步（assistant 文本/思考、tool 调用与入参、tool 结果）追加到 transcript 日志。"""
+    import json as _json
+    from datetime import datetime, timezone
+
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    lines: list[str] = []
+    content = getattr(msg, "message", None)
+    if isinstance(content, dict):
+        for part in content.get("content", []):
+            kind = part.get("type")
+            if kind == "text":
+                lines.append(f"  A {part.get('text', '')[:400]}")
+            elif kind == "thinking":
+                lines.append(f"  T {part.get('thinking', '')[:200]}")
+            elif kind == "tool_use":
+                inp = part.get("input", {})
+                lines.append(f"  TOOL {part.get('name', '?')} "
+                             f"{_json.dumps(inp, ensure_ascii=False)[:600]}")
+            elif kind == "tool_result":
+                c = part.get("content", "")
+                if isinstance(c, list):
+                    c = "".join(x.get("text", "") for x in c if isinstance(x, dict))
+                lines.append(f"  RESULT {part.get('tool_use_id', '?')} {str(c)[:300]}")
+    elif isinstance(content, list):                     # assistant 老结构
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                lines.append(f"  A {part.get('text', '')[:400]}")
+    if lines:
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        with transcript.open("a", encoding="utf-8") as f:
+            f.write(f"{ts} {type(msg).__name__}\n" + "\n".join(lines) + "\n")
 
 
 def _missing_outputs(paths: list[Path]) -> list[Path]:
