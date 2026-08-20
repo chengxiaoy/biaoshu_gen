@@ -1,7 +1,7 @@
 """Claude Code SDK（claude-agent-sdk）封装：文件操作型 harness 节点统一入口。
 
-SDK 以子进程方式拉起 claude CLI，自动继承本机环境
-（ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN -> 智谱网关）。
+SDK 以子进程方式拉起 claude CLI，Anthropic 协议端点由 .env 的 HARNESS_* 三件套
+显式注入（setting_sources=[]，覆盖本机继承的 ANTHROPIC_* 环境变量）。
 """
 import asyncio
 import shutil
@@ -55,8 +55,8 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
     from claude_agent_sdk import ClaudeAgentOptions, query
 
     s = get_settings()
-    # harness 节点可用独立模型（HARNESS_MODEL），缺省跟随 llm_model。
-    model = s.harness_model or s.llm_model
+    # harness 模型独立配置（HARNESS_MODEL），不回退 llm_model（命名空间不同）。
+    model = s.harness_model
     # claude agent 调试日志：各节点独立文件（run/harness_debug/<工作区>.log，绝对路径）
     extra_args: dict = {}
     run_dir = _find_run_dir(cwd)
@@ -71,10 +71,11 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
         model=model,
         setting_sources=[],                    # 跳过用户/项目 settings（其 ANTHROPIC_* 会覆盖注入配置）
         extra_args=extra_args,
-        # 全面使用 .env 配置（BASE_URL/API_KEY/MODEL_NAME），覆盖本机继承的 ANTHROPIC_* 环境变量。
+        # 全面使用 .env 的 HARNESS_* 三件套（Anthropic 协议端点），
+        # 覆盖本机继承的 ANTHROPIC_* 环境变量。
         env={
-            "ANTHROPIC_BASE_URL": s.anthropic_base_url,
-            "ANTHROPIC_AUTH_TOKEN": s.llm_api_key,
+            "ANTHROPIC_BASE_URL": s.harness_base_url,
+            "ANTHROPIC_AUTH_TOKEN": s.harness_api_key,
             "ANTHROPIC_MODEL": model,
             "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
             "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
@@ -158,9 +159,25 @@ def _run_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
 _SDK_RETRIES = 3          # SDK 异常（网关/子进程偶发 error result）重试次数
 
 
+def _require_harness_settings(s) -> None:
+    """harness 三件套（Anthropic 协议端点）缺失即抛错——独立 provider，不回退 LLM 三件套。"""
+    missing = [name for name, val in (
+        ("HARNESS_API_KEY", s.harness_api_key),
+        ("HARNESS_BASE_URL", s.harness_base_url),
+        ("HARNESS_MODEL", s.harness_model),
+    ) if not val]
+    if missing:
+        raise HarnessError(
+            "harness 节点缺少配置（Anthropic 协议端点，请在 .env 配置）："
+            + " / ".join(missing)
+        )
+
+
 def run_harness_task(task: HarnessTask) -> list[Path]:
-    """执行任务；SDK 异常重试（≤3 次退避）；产物缺失再带反馈重试一次 -> 仍失败抛 HarnessError。"""
-    max_turns = task.max_turns or get_settings().harness_max_turns
+    """执行任务；先校验三件套；SDK 异常重试（≤3 次退避）；产物缺失再带反馈重试一次 -> 仍失败抛 HarnessError。"""
+    s = get_settings()
+    _require_harness_settings(s)
+    max_turns = task.max_turns or s.harness_max_turns
     first = ""
     for attempt in range(_SDK_RETRIES):
         try:

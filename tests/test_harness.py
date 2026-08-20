@@ -13,6 +13,19 @@ def _ok_query(prompt: str, cwd: Path, max_turns: int) -> str:
     return "已产出 expected.md"
 
 
+@pytest.fixture
+def harness_settings(monkeypatch):
+    """注入合法 harness 三件套（run_harness_task 入口校验需要），不依赖本机 .env。"""
+    from biaoshu_gen.config import Settings
+    fake = Settings(
+        _env_file=None,
+        harness_api_key="sk-test-harness",
+        harness_base_url="https://gw.example.com/anthropic",
+        harness_model="test-model",
+    )
+    monkeypatch.setattr(harness, "get_settings", lambda: fake)
+
+
 def test_prepare_workspace_copies_inputs(tmp_path: Path):
     src = tmp_path / "a.yaml"
     src.write_text("x: 1", encoding="utf-8")
@@ -48,7 +61,7 @@ def test_environment_notes_mentions_interpreter():
     assert "相对路径" in notes and "fill_skill" in notes
 
 
-def test_run_harness_task_success(tmp_path: Path, monkeypatch):
+def test_run_harness_task_success(tmp_path: Path, harness_settings, monkeypatch):
     async def fake(prompt, cwd, max_turns):
         return _ok_query(prompt, Path(cwd), max_turns)
     monkeypatch.setattr(harness, "_query_sdk", fake)
@@ -57,7 +70,7 @@ def test_run_harness_task_success(tmp_path: Path, monkeypatch):
     assert run_harness_task(task) == [out]
 
 
-def test_run_harness_task_retries_once_then_raises(tmp_path: Path, monkeypatch):
+def test_run_harness_task_retries_once_then_raises(tmp_path: Path, harness_settings, monkeypatch):
     calls = []
 
     async def fake(prompt, cwd, max_turns):
@@ -72,7 +85,7 @@ def test_run_harness_task_retries_once_then_raises(tmp_path: Path, monkeypatch):
     assert "未产出" in calls[1]               # 重试 prompt 带缺项反馈
 
 
-def test_run_harness_task_retry_can_succeed(tmp_path: Path, monkeypatch):
+def test_run_harness_task_retry_can_succeed(tmp_path: Path, harness_settings, monkeypatch):
     n = 0
 
     async def fake(prompt, cwd, max_turns):
@@ -86,7 +99,7 @@ def test_run_harness_task_retry_can_succeed(tmp_path: Path, monkeypatch):
                                         expected_outputs=[tmp_path / "expected.md"]))
 
 
-def test_run_harness_task_retries_on_sdk_exception(tmp_path: Path, monkeypatch):
+def test_run_harness_task_retries_on_sdk_exception(tmp_path: Path, harness_settings, monkeypatch):
     """SDK 首次调用异常（网关偶发）-> 重试一次成功。"""
     calls = []
 
@@ -108,3 +121,57 @@ def test_find_run_dir():
     from pathlib import Path
     p = Path("data/runs/x/06_fill/forms")
     assert _find_run_dir(p) is None                 # 未落盘时不返回
+
+
+def test_run_harness_task_requires_harness_settings(tmp_path: Path, monkeypatch):
+    """三件套缺失 -> 立即抛 HarnessError，不触发 SDK 调用（重试循环之前）。"""
+    from biaoshu_gen.config import Settings
+    monkeypatch.setattr(harness, "get_settings",
+                        lambda: Settings(_env_file=None))          # 三件套全空
+
+    async def must_not_run(prompt, cwd, max_turns):
+        raise AssertionError("SDK 不应被调用")
+
+    monkeypatch.setattr(harness, "_query_sdk", must_not_run)
+    task = HarnessTask(prompt="p", cwd=tmp_path, expected_outputs=[tmp_path / "expected.md"])
+    with pytest.raises(HarnessError) as e:
+        run_harness_task(task)
+    assert "HARNESS_API_KEY" in str(e.value)
+    assert "HARNESS_BASE_URL" in str(e.value)
+    assert "HARNESS_MODEL" in str(e.value)
+
+
+def test_run_harness_task_error_names_only_missing_vars(tmp_path: Path, monkeypatch):
+    from biaoshu_gen.config import Settings
+    monkeypatch.setattr(harness, "get_settings",
+                        lambda: Settings(_env_file=None, harness_api_key="sk-x"))
+
+    async def must_not_run(prompt, cwd, max_turns):
+        raise AssertionError("SDK 不应被调用")
+
+    monkeypatch.setattr(harness, "_query_sdk", must_not_run)
+    task = HarnessTask(prompt="p", cwd=tmp_path, expected_outputs=[tmp_path / "expected.md"])
+    with pytest.raises(HarnessError) as e:
+        run_harness_task(task)
+    assert "HARNESS_API_KEY" not in str(e.value)      # 已配置的不点名
+    assert "HARNESS_BASE_URL" in str(e.value)
+
+
+def test_query_sdk_injects_harness_env(harness_settings, tmp_path: Path, monkeypatch):
+    """env 注入来自 harness 三件套：不派生、不复用 llm key、不回退 llm 模型。"""
+    import claude_agent_sdk as cas
+    captured = {}
+
+    async def fake_query(*, prompt, options):
+        captured["env"] = dict(options.env)
+        captured["model"] = options.model
+        return
+        yield                                  # 使其成为 async generator
+
+    monkeypatch.setattr(cas, "query", fake_query)
+    import asyncio
+    asyncio.run(harness._query_sdk("提示", tmp_path, 3))
+    assert captured["model"] == "test-model"
+    assert captured["env"]["ANTHROPIC_BASE_URL"] == "https://gw.example.com/anthropic"
+    assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-test-harness"
+    assert captured["env"]["ANTHROPIC_MODEL"] == "test-model"
