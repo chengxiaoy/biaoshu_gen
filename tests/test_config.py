@@ -41,3 +41,37 @@ def test_base_url_strips_completions_path():
     assert s.llm_base_url == "https://openrouter.ai/api/v1"
     s2 = Settings(_env_file=None, llm_base_url="https://api.deepseek.com")
     assert s2.llm_base_url == "https://api.deepseek.com"
+
+
+def test_settings_reads_harness_env(monkeypatch):
+    monkeypatch.setenv("HARNESS_API_KEY", "sk-harness")
+    monkeypatch.setenv("HARNESS_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
+    monkeypatch.setenv("HARNESS_MODEL", "glm-4.6")
+    s = Settings(_env_file=None)
+    assert s.harness_api_key == "sk-harness"
+    assert s.harness_base_url == "https://open.bigmodel.cn/api/anthropic"
+    assert s.harness_model == "glm-4.6"
+
+
+def test_harness_defaults_empty():
+    s = Settings(_env_file=None)
+    assert s.harness_api_key == ""
+    assert s.harness_base_url == ""
+    assert s.harness_model == ""
+
+
+def test_harness_base_url_normalizes_trailing_paths():
+    """带 /v1/messages 或 /v1 尾巴都归一为 Anthropic base（CLI 自拼 /v1/messages）。"""
+    s1 = Settings(_env_file=None, harness_base_url="https://openrouter.ai/api/v1/messages")
+    assert s1.harness_base_url == "https://openrouter.ai/api"
+    s2 = Settings(_env_file=None, harness_base_url="https://openrouter.ai/api/v1")
+    assert s2.harness_base_url == "https://openrouter.ai/api"
+    s3 = Settings(_env_file=None, harness_base_url="https://api.anthropic.com")
+    assert s3.harness_base_url == "https://api.anthropic.com"
+    s4 = Settings(_env_file=None, harness_base_url="")
+    assert s4.harness_base_url == ""
+
+
+def test_anthropic_base_url_property_removed():
+    """派生逻辑（OpenRouter 双协议耦合）已删，不得再出现。"""
+    assert not hasattr(Settings(_env_file=None), "anthropic_base_url")

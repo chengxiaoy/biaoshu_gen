@@ -25,8 +25,17 @@ class Settings(BaseSettings):
         default="https://api.deepseek.com",
         validation_alias=AliasChoices("BASE_URL", "DEEPSEEK_BASE_URL"),
     )
-    # harness 节点（claude CLI）可用独立模型；缺省跟随 llm_model。
-    # 用途：当主模型额度紧张时，可把 HARNESS_MODEL 指向免费档模型，避免 402。
+    # harness 三件套（Anthropic 协议端点，claude CLI 子进程用）。
+    # 与 LLM 三件套相互独立、不回退：双协议网关（OpenRouter）只是恰好可两端同配。
+    harness_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("HARNESS_API_KEY"),
+    )
+    harness_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("HARNESS_BASE_URL"),
+    )
+    # harness 模型不回退 llm_model：独立 provider 的模型命名空间不同，回退必然错。
     harness_model: str = Field(
         default="",
         validation_alias=AliasChoices("HARNESS_MODEL", "HARNESS_MODEL_NAME"),
@@ -41,14 +50,17 @@ class Settings(BaseSettings):
                 return v[: -len(suffix)]
         return v
 
-    @property
-    def anthropic_base_url(self) -> str:
-        """claude CLI（Anthropic 协议）用的 base：CLI 自动追加 /v1/messages，
-        OpenAI 风格 base（…/v1）需去尾 /v1（如 OpenRouter 的 …/api/v1/messages）。"""
-        b = self.llm_base_url.rstrip("/")
-        return b[: -len("/v1")] if b.endswith("/v1") else b
-
-    # harness 节点走 claude-agent-sdk，继承本机 ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN，无需配置
+    @field_validator("harness_base_url")
+    @classmethod
+    def _strip_messages_path(cls, v: str) -> str:
+        """归一写完整端点（…/v1/messages）或带 /v1 尾巴的情况：
+        claude CLI（Anthropic SDK）自拼 /v1/messages，base 不能带。空串跳过。"""
+        if not v:
+            return v
+        for suffix in ("/v1/messages", "/v1"):
+            if v.endswith(suffix):
+                return v[: -len(suffix)]
+        return v
 
     data_dir: Path = Path("data")
 
