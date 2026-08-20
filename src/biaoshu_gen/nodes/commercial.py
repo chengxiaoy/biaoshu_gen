@@ -6,7 +6,7 @@
 from pathlib import Path
 
 from ..docx_io import template_has_section
-from ..fill_context import build_fill_context
+from ..fill_context import build_fill_context, prefill_known
 from ..harness import HarnessTask, prepare_agent_workspace, run_harness_task
 from ..prompts.commercial import SYSTEM, build_user_prompt
 from ..state import BidState, run_dir
@@ -25,8 +25,10 @@ def commercial_node(state: BidState) -> dict:
         (run_dir(state) / "01_parse" / "metadata.yaml", "metadata.yaml"),
         (run_dir(state) / "03_facts.yaml", "facts.yaml")])
     out = ws / "commercial.docx"
-    run_harness_task(HarnessTask(
-        prompt=SYSTEM + "\n\n" + build_user_prompt(str(out))
-        + "\n\n" + build_fill_context(state),
-        cwd=ws, expected_outputs=[out]))
+    prefilled = prefill_known(ws / "标书模板.docx", state)   # 确定值代码直填
+    prompt = (SYSTEM + "\n\n" + build_user_prompt(str(out))
+              + "\n\n" + build_fill_context(state, template_path=ws / "标书模板.docx"))
+    if prefilled:
+        prompt += "\n\n【系统已预填字段（勿在 PLAN 中重复填写；发现遗漏才补）】\n- " + "\n- ".join(prefilled)
+    run_harness_task(HarnessTask(prompt=prompt, cwd=ws, expected_outputs=[out]))
     return {"commercial_docx_path": str(out)}

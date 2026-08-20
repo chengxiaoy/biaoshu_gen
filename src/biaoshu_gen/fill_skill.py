@@ -35,12 +35,8 @@ def find_para(doc, prefix: str) -> Paragraph:
     raise RuntimeError(f"找不到以 {prefix!r} 开头的段落；请核对模板文本")
 
 
-def fill_blank(doc, prefix: str, value: str) -> Paragraph:
-    """在 prefix 段落的填空线上填 value（保留下划线格式，不追加到线后）。
-
-    优先级：带下划线的空白 run > 下划线字符 run（替换并留余线）> 复制格式插入带下划线 run。
-    """
-    p = find_para(doc, prefix)
+def _fill_blank_in_para(p: Paragraph, value: str) -> None:
+    """在单个段落的填空线上填 value（保留下划线格式，不追加到线后）。"""
     blanks = [r for r in p.runs if r.text and not r.text.strip()]
     underlined = [r for r in blanks if _is_underlined(r)]
     if underlined:
@@ -48,12 +44,12 @@ def fill_blank(doc, prefix: str, value: str) -> Paragraph:
         for r in blanks:                       # 其余空白 run 清空（避免重复落值）
             if r is not underlined[0]:
                 r.text = ""
-        return p
+        return
     for r in p.runs:                            # 下划线字符 run（＿＿＿/___）
         t = (r.text or "").strip()
         if t and set(t) <= UNDERLINE_CHARS:
             r.text = f"{value}{'＿' * 2}"       # 值落在线上并保留余线
-            return p
+            return
     # 无空白也无下划线字符：复制末 run 格式插入带下划线的值 run（位置在段内，非段后附加）
     new_r = p.add_run(f" {value} ")
     last = p.runs[-2] if len(p.runs) >= 2 else p.runs[0]   # 复制标签 run 格式
@@ -65,7 +61,23 @@ def fill_blank(doc, prefix: str, value: str) -> Paragraph:
         u = rPr.makeelement(qn("w:u"), {})
         rPr.append(u)
     u.set(qn("w:val"), "single")
+
+
+def fill_blank(doc, prefix: str, value: str) -> Paragraph:
+    """在 prefix 段落的填空线上填 value（首个匹配段落）。"""
+    p = find_para(doc, prefix)
+    _fill_blank_in_para(p, value)
     return p
+
+
+def fill_all_blanks(doc, prefix: str, value: str) -> int:
+    """把**所有**以 prefix 开头的段落的填空线都填上 value，返回填写段数（预填已知值用）。"""
+    n = 0
+    for p in doc.paragraphs:
+        if p.text.strip().startswith(prefix):
+            _fill_blank_in_para(p, value)
+            n += 1
+    return n
 
 
 def replace_in_para(doc, prefix: str, old: str, new: str) -> Paragraph:

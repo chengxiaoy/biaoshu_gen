@@ -140,3 +140,38 @@ def test_fill_prompts_preinject_context(tmp_path: Path, monkeypatch):
     assert "模板可填点地图" in prompt and "项目名称" in prompt   # 地图已注入
     assert "facts.yaml 全文" in prompt and "90 天" in prompt    # facts 已注入
     assert "营业执照.jpg" in prompt                              # 图片绝对路径已注入
+
+
+def test_prefill_known_fills_deterministic_values(tmp_path: Path, monkeypatch):
+    """确定值（项目名称/编号/投标人等）由代码预填进模板副本，prompt 标注勿重复。"""
+    monkeypatch.chdir(tmp_path)
+    from docx import Document
+    state = _base_state(tmp_path, monkeypatch)
+    tpl = tmp_path / "标书模板.docx"
+    d = Document()
+    for label in ("项目名称：", "项目编号：", "投标人（签章）：", "法定代表人：", "采购人名称："):
+        p = d.add_paragraph()
+        p.add_run(label)
+        blank = p.add_run("        ")
+        blank.underline = True
+    d.add_paragraph("商务部分")
+    d.save(tpl)
+    state = state.model_copy(update={"template_docx_path": str(tpl)})
+    # facts 带 template_fields 与企业资料
+    from biaoshu_gen.business import ensure_business_fields
+    ensure_business_fields(state)
+    fp = run_dir(state) / "03_facts.yaml"
+    fp.write_text(fp.read_text(encoding="utf-8")
+                  + 'template_fields:\n  项目名称: 演示项目\n  项目编号: DEMO-001\n  采购人名称: 某某局\n',
+                  encoding="utf-8")
+
+    from biaoshu_gen.fill_context import prefill_known
+    summary = prefill_known(tpl, state)
+    d2 = Document(str(tpl))
+    texts = [p.text for p in d2.paragraphs]
+    assert "项目名称：演示项目" in texts
+    assert "项目编号：DEMO-001" in texts
+    assert "采购人名称：某某局" in texts
+    assert any(t.startswith("投标人（签章）：某某科技") for t in texts)   # mock 企业名已预填
+    assert any(t.startswith("法定代表人：法定代表人") for t in texts)
+    assert "项目名称×1" in summary and "投标人×1" in summary

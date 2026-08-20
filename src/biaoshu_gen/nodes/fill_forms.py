@@ -4,7 +4,7 @@
 无响应模板则跳过（无法保证格式一致性）。模板地图与企业资料等**预注入 prompt**，压缩轮次。
 """
 from ..business import ensure_business_fields
-from ..fill_context import build_fill_context
+from ..fill_context import build_fill_context, prefill_known
 from ..harness import HarnessTask, prepare_agent_workspace, run_harness_task
 from ..prompts.fill_forms import SYSTEM, build_user_prompt
 from ..state import BidState, run_dir
@@ -20,9 +20,11 @@ def fill_forms_node(state: BidState) -> dict:
         (run_dir(state) / "01_parse" / "invalidation.yaml", "invalidation.yaml"),
         (run_dir(state) / "03_facts.yaml", "facts.yaml")])
     out = ws / "forms.docx"
-    run_harness_task(HarnessTask(
-        prompt=(SYSTEM + "\n\n" + build_user_prompt(
-            str(out), facts.company_name, facts.legal_person, facts.credit_code)
-            + "\n\n" + build_fill_context(state)),
-        cwd=ws, expected_outputs=[out]))
+    prefilled = prefill_known(ws / "标书模板.docx", state)   # 确定值代码直填，压缩 PLAN 体积
+    prompt = (SYSTEM + "\n\n" + build_user_prompt(
+        str(out), facts.company_name, facts.legal_person, facts.credit_code)
+        + "\n\n" + build_fill_context(state, template_path=ws / "标书模板.docx"))
+    if prefilled:
+        prompt += "\n\n【系统已预填字段（勿在 PLAN 中重复填写；发现遗漏才补）】\n- " + "\n- ".join(prefilled)
+    run_harness_task(HarnessTask(prompt=prompt, cwd=ws, expected_outputs=[out]))
     return {"forms_docx_path": str(out)}
