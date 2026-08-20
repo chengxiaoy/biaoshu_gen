@@ -6,14 +6,15 @@
 ## 技术栈
 
 Python 3.11+ · poetry · LangGraph（单一状态图 + SqliteSaver 断点续跑）·
-PydanticAI（结构化输出节点，OpenAI 兼容端点：OpenRouter / DeepSeek 等）·
-Claude Code SDK（harness 文件操作节点，ANTHROPIC_* 环境由 .env 三件套派生注入）
+PydanticAI（结构化输出节点，OpenAI 协议端点：OpenRouter / DeepSeek 等）·
+Claude Code SDK（harness 文件操作节点，独立 HARNESS_* 三件套注入 Anthropic 协议端点）
 
 ## 安装
 
 ```bash
 poetry install
-cp .env.example .env   # 在 .env 写入 API_KEY=sk-xxx（OpenRouter/DeepSeek 等 OpenAI 兼容 key）
+cp .env.example .env   # 写入两套三件套：API_KEY/MODEL_NAME/BASE_URL（OpenAI 协议）
+                        # + HARNESS_API_KEY/HARNESS_BASE_URL/HARNESS_MODEL（Anthropic 协议）
 ```
 
 ## 数据准备
@@ -48,18 +49,22 @@ poetry run biaoshu status     # 查看进度
 不花 LLM 成本的单元测试见下节；本节是**接入真实模型与真实 harness 的完整验收流程**
 （已在 Windows 11 + OpenRouter `deepseek/deepseek-v4-flash-0731` 跑通）。
 
-### 1. 配置 `.env`（通用三件套，任何 OpenAI 兼容端点）
+### 1. 配置 `.env`（两套三件套，各自协议独立）
 
 ```ini
 API_KEY=sk-你的key            # OpenRouter / DeepSeek 官方等
 MODEL_NAME=deepseek/deepseek-v4-flash-0731
 BASE_URL=https://openrouter.ai/api/v1     # 写完整 …/chat/completions 也可以，会自动归一
+
+HARNESS_API_KEY=sk-你的harness-key    # Anthropic 协议端点 key（智谱 / Anthropic 官方 / OpenRouter 等）
+HARNESS_BASE_URL=https://open.bigmodel.cn/api/anthropic   # 写 …/v1 或 …/v1/messages 也会自动归一
+HARNESS_MODEL=glm-4.6
 ```
 
 - 兼容旧命名 `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` / `DEEPSEEK_BASE_URL`（`API_KEY` 优先）
-- harness 节点不需要单独配置：Claude Code SDK 子进程的 `ANTHROPIC_BASE_URL` /
-  `ANTHROPIC_AUTH_TOKEN` / 模型均由 .env 三件套派生注入
-  （`setting_sources=[]`，会覆盖本机继承的 `ANTHROPIC_*` 环境变量）
+- harness 节点走独立 HARNESS_* 三件套（Anthropic 协议），Claude Code SDK 子进程的
+  `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / 模型均由它显式注入
+  （`setting_sources=[]`，覆盖本机继承的 `ANTHROPIC_*`）；任一缺失，harness 节点启动即报错
 - 模型选型提示：免费/flash 档模型在大结构化输出上偶发字段遗漏或指令泄漏，
   代码已内置防护（必填校验重试、标题清洗、少章重试、瞬态网络指数退避重试），
   但**质量要求高的场景建议用更强模型**（如 deepseek-chat 级别）
@@ -105,7 +110,7 @@ poetry run pytest        # 无 LLM 成本（假模型 + mock harness）
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `API_KEY` / `MODEL_NAME` / `BASE_URL` | — | LLM 三件套（必填） |
-| `HARNESS_MODEL` | —（跟随 `MODEL_NAME`） | harness 节点独立模型；额度紧张时指向免费档避免 402 |
+| `HARNESS_API_KEY` / `HARNESS_BASE_URL` / `HARNESS_MODEL` | — | harness 三件套（必填，Anthropic 协议端点），不回退 LLM 三件套 |
 | `BODY_CONCURRENCY` | 6 | 正文按三级小节并发生成的并发数 |
 | `BODY_REVIEW_MAX_ROUNDS` | 2 | 正文审核回环上限 |
 | `REVISE_MAX_ROUNDS` | 2 | 审核→修改回环上限 |

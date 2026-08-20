@@ -1,4 +1,4 @@
-"""PydanticAI Agent 工厂：OpenAI 兼容端点（OpenRouter / DeepSeek 等，配置见 config）。"""
+"""PydanticAI Agent 工厂：任意 OpenAI 兼容端点（配置见 config，协议与 harness 三件套独立）。"""
 import httpx
 import time
 
