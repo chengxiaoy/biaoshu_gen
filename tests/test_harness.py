@@ -21,6 +21,24 @@ def test_prepare_workspace_copies_inputs(tmp_path: Path):
     assert (ws / "input.yaml").read_text(encoding="utf-8") == "x: 1"
 
 
+def test_prepare_workspace_overwrites_stale_input(tmp_path: Path):
+    """输入必须覆盖为当前状态——曾因'已存在则跳过'把过期 review_report.md 留在工作区。"""
+    src = tmp_path / "report.md"
+    src.write_text("新报告", encoding="utf-8")
+    ws = prepare_workspace(tmp_path, "07_draft", [(src, "review_report.md")])
+    src.write_text("更新后的报告", encoding="utf-8")            # 源文件更新
+    prepare_workspace(tmp_path, "07_draft", [(src, "review_report.md")])
+    assert (ws / "review_report.md").read_text(encoding="utf-8") == "更新后的报告"
+
+
+def test_environment_notes_mentions_interpreter():
+    from biaoshu_gen.harness import environment_notes
+    notes = environment_notes()
+    import sys
+    assert sys.executable in notes
+    assert "相对路径" in notes and "fill_skill" in notes
+
+
 def test_run_harness_task_success(tmp_path: Path, monkeypatch):
     async def fake(prompt, cwd, max_turns):
         return _ok_query(prompt, Path(cwd), max_turns)

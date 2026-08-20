@@ -192,9 +192,9 @@ def prepare_workspace(run_dir: Path, stage_subdir: str,
     ws = run_dir / stage_subdir
     ws.mkdir(parents=True, exist_ok=True)
     for src, name in inputs or []:
-        target = ws / name
-        if not target.exists():
-            shutil.copyfile(src, target)
+        # 输入必须**总是覆盖**为当前状态：曾因"已存在则跳过"把过期 review_report.md
+        # 留在工作区，agent 拿旧报告改新稿，白烧几分钟核对草稿结构。
+        shutil.copyfile(src, ws / name)
     return ws
 
 
@@ -213,10 +213,18 @@ def prepare_agent_workspace(state, subdir: str,
         inputs.append((Path(state.template_docx_path), "标书模板.docx"))
     inputs.extend([(Path(p), n) for p, n in (extra_inputs or [])])
     ws = prepare_workspace(run_dir(state), subdir, inputs)
-    skill_target = ws / "fill_skill.py"
-    if not skill_target.exists():
-        skill_src = Path(__file__).with_name("fill_skill.py")
-        if skill_src.exists():
-            shutil.copyfile(skill_src, skill_target)
+    skill_src = Path(__file__).with_name("fill_skill.py")
+    if skill_src.exists():
+        shutil.copyfile(skill_src, ws / "fill_skill.py")   # 总是同步最新 skill
     KnowledgeBase.load(Path(state.kb_dir)).dump_summary(ws / "kb.md")
     return ws
+
+
+def environment_notes() -> str:
+    """给 harness prompt 的环境说明：cwd/解释器写死，省掉 agent 自探的 turns。"""
+    return (
+        "环境说明（已核实，直接采信）：\n"
+        "- 当前工作目录已经是工作区，文件一律用相对路径访问，不要 cd 到别处\n"
+        f"- Python 解释器用绝对路径：{sys.executable}（PATH 里可能没有 python 命令）\n"
+        "- fill_skill.py 已在工作区内，可直接 import"
+    )
