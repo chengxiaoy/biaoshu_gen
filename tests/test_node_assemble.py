@@ -38,7 +38,8 @@ def _state(tmp_path: Path, monkeypatch, version: int = 0) -> BidState:
     )
 
 
-def test_assemble_no_template(tmp_path: Path, monkeypatch):
+def test_assemble_uses_filled_forms_as_base_and_dedups(tmp_path: Path, monkeypatch):
+    """底稿 = forms.docx（模板壳已填），commercial/deviation 去重追加不重复壳。"""
     state = _state(tmp_path, monkeypatch)
     updates = asm.assemble_node(state)
     dest = Path(updates["draft_docx_path"])
@@ -46,8 +47,10 @@ def test_assemble_no_template(tmp_path: Path, monkeypatch):
     assert (run_dir(state) / "07_draft" / "latest.txt").read_text(encoding="utf-8") == "1"
     doc = Document(str(dest))
     texts = "\n".join(p.text for p in doc.paragraphs)
-    assert "演示项目 投标文件" in texts and "总体方案" in texts and "forms" in texts
-    assert len(doc.tables) == 1                     # forms.docx 的表格并入
+    assert "forms" in texts and "总体方案" in texts
+    assert "commercial" in texts and "deviation" in texts   # 去重后仍含填充内容
+    assert texts.count("forms") == 1 and texts.count("commercial") == 1   # 壳不重复
+    assert len(doc.tables) == 1                             # forms 表格仅一份
     assert updates["draft_version"] == 1
 
 
@@ -58,11 +61,16 @@ def test_assemble_version_increments(tmp_path: Path, monkeypatch):
     assert (run_dir(state) / "07_draft" / "latest.txt").read_text(encoding="utf-8") == "2"
 
 
-def test_assemble_with_template_base(tmp_path: Path, monkeypatch):
+def test_assemble_falls_back_to_template_when_no_forms(tmp_path: Path, monkeypatch):
     tpl = tmp_path / "标书模板.docx"
     _make_docx(tpl, "模板标题页")
-    state = _state(tmp_path, monkeypatch).model_copy(update={"template_docx_path": str(tpl)})
+    state = _state(tmp_path, monkeypatch)
+    state = state.model_copy(update={
+        "template_docx_path": str(tpl),
+        "forms_docx_path": "",                              # forms 缺失 -> 用模板底稿
+    })
     updates = asm.assemble_node(state)
     doc = Document(updates["draft_docx_path"])
     texts = "\n".join(p.text for p in doc.paragraphs)
     assert "模板标题页" in texts and "总体方案" in texts
+    assert "commercial" in texts
