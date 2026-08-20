@@ -93,37 +93,57 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
 
 
 def _log_msg(transcript: Path, msg) -> None:
-    """把 agent 每一步（assistant 文本/思考、tool 调用与入参、tool 结果）追加到 transcript 日志。"""
+    """把 agent 每一步（assistant 文本/思考、tool 调用与入参、tool 结果）追加到 transcript 日志。
+
+    claude-agent-sdk 0.2.x yield 的是扁平 dataclass（没有 .message 字段）：
+    AssistantMessage.content 为 TextBlock/ThinkingBlock/ToolUseBlock 对象列表，
+    tool 结果挂在 UserMessage.content 的 ToolResultBlock 里，ResultMessage 为汇总。
+    """
     import json as _json
     from datetime import datetime, timezone
 
-    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    from claude_agent_sdk import (
+        AssistantMessage,
+        ResultMessage,
+        TextBlock,
+        ThinkingBlock,
+        ToolResultBlock,
+        ToolUseBlock,
+        UserMessage,
+    )
+
+    ts = datetime.now(timezone.utc).astimezone().strftime("%H:%M:%S")
     lines: list[str] = []
-    content = getattr(msg, "message", None)
-    if isinstance(content, dict):
-        for part in content.get("content", []):
-            kind = part.get("type")
-            if kind == "text":
-                lines.append(f"  A {part.get('text', '')[:400]}")
-            elif kind == "thinking":
-                lines.append(f"  T {part.get('thinking', '')[:200]}")
-            elif kind == "tool_use":
-                inp = part.get("input", {})
-                lines.append(f"  TOOL {part.get('name', '?')} "
-                             f"{_json.dumps(inp, ensure_ascii=False)[:600]}")
-            elif kind == "tool_result":
-                c = part.get("content", "")
+    if isinstance(msg, AssistantMessage):
+        for part in msg.content or []:
+            if isinstance(part, TextBlock):
+                lines.append(f"A {(part.text or '')[:400]}")
+            elif isinstance(part, ThinkingBlock):
+                lines.append(f"T {(part.thinking or '')[:200]}")
+            elif isinstance(part, ToolUseBlock):
+                lines.append(f"TOOL {part.name} "
+                             f"{_json.dumps(part.input, ensure_ascii=False, default=str)[:600]}")
+    elif isinstance(msg, UserMessage):
+        for part in (msg.content if isinstance(msg.content, list) else []):
+            if isinstance(part, ToolResultBlock):
+                c = part.content
                 if isinstance(c, list):
                     c = "".join(x.get("text", "") for x in c if isinstance(x, dict))
-                lines.append(f"  RESULT {part.get('tool_use_id', '?')} {str(c)[:300]}")
-    elif isinstance(content, list):                     # assistant 老结构
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                lines.append(f"  A {part.get('text', '')[:400]}")
-    if lines:
-        transcript.parent.mkdir(parents=True, exist_ok=True)
-        with transcript.open("a", encoding="utf-8") as f:
-            f.write(f"{ts} {type(msg).__name__}\n" + "\n".join(lines) + "\n")
+                mark = "!" if part.is_error else ""
+                lines.append(f"RESULT{mark} {part.tool_use_id} {str(c)[:300]}")
+    elif isinstance(msg, ResultMessage):
+        head = (f"SUMMARY subtype={msg.subtype} is_error={msg.is_error} "
+                f"turns={msg.num_turns} {msg.duration_ms}ms")
+        if msg.errors:
+            head += f" errors={'; '.join(msg.errors)[:200]}"
+        lines.append(head)
+        if msg.result:
+            lines.append(f"FINAL {msg.result[:400]}")
+    if not lines:
+        return
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    with transcript.open("a", encoding="utf-8") as f:
+        f.write(f"{ts} {type(msg).__name__}\n" + "\n".join(lines) + "\n")
 
 
 def _missing_outputs(paths: list[Path]) -> list[Path]:
