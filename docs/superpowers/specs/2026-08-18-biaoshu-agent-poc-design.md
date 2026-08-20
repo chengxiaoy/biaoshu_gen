@@ -8,7 +8,7 @@
 
 构建软件标书智能体 POC：输入招标文件（docx）与企业信息知识库，自动解析招标文件、生成符合投标要求的标书草稿（docx）。
 
-POC 验收形态：**端到端可跑通**——用仓库 `docs/` 中的样例素材（`软件招标文件.docx`、`标书模板.docx`、`营业执照测试.jpg`）真实产出一份标书草稿。
+POC 验收形态：**端到端可跑通**——用仓库 `data/` 中的样例素材真实产出一份标书草稿。
 
 ### 已确认的关键决策
 
@@ -65,8 +65,8 @@ CLI (typer)  ──子命令──▶  LangGraph StateGraph（单图 = 文档全
 
 ```
 data/
-├── tender/软件招标文件.docx          # 招标文件（POC 用 docs/ 样例）
-├── company/                          # 企业信息知识库（POC 用 docs/ 样例材料）
+├── tender/软件招标文件.docx          # 招标文件
+├── company/                          # 企业信息知识库
 └── runs/<run_id>/
     ├── checkpoint.sqlite              # LangGraph 状态（断点续跑）
     ├── error.log                      # 最近一次错误
