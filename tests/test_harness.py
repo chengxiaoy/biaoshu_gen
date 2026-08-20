@@ -74,3 +74,10 @@ def test_run_harness_task_retries_on_sdk_exception(tmp_path: Path, monkeypatch):
     out = tmp_path / "expected.md"
     assert run_harness_task(HarnessTask(prompt="p", cwd=tmp_path, expected_outputs=[out])) == [out]
     assert len(calls) == 2
+
+
+def test_find_run_dir():
+    from biaoshu_gen.harness import _find_run_dir
+    from pathlib import Path
+    p = Path("data/runs/x/06_fill/forms")
+    assert _find_run_dir(p) is None                 # 未落盘时不返回

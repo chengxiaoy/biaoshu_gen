@@ -25,6 +25,16 @@ class HarnessTask:
     max_turns: int = 0            # 0 -> 使用 settings.harness_max_turns
 
 
+def _find_run_dir(cwd: Path) -> Path | None:
+    """从工作区向上找 run 根目录（含 run.json），用于落 harness 调试日志。"""
+    p = cwd
+    while p != p.parent:
+        if (p / "run.json").exists():
+            return p
+        p = p.parent
+    return None
+
+
 async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
     from claude_agent_sdk import ClaudeAgentOptions, query
 
@@ -36,12 +46,18 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
     base_url = s.llm_base_url.rstrip("/")
     if base_url.endswith("/v1"):
         base_url = base_url[: -len("/v1")]
+    # claude agent 调试日志落盘到 run 根目录（feedbacks：设置 debug-file）
+    extra_args: dict = {}
+    run_dir = _find_run_dir(cwd)
+    if run_dir is not None:
+        extra_args["debug-file"] = str(run_dir / "harness_debug.log")
     options = ClaudeAgentOptions(
         cwd=str(cwd),
         max_turns=max_turns,
         permission_mode="bypassPermissions",   # POC 本机受控工作区
         model=model,
         setting_sources=[],                    # 跳过用户/项目 settings（其 ANTHROPIC_* 会覆盖注入配置）
+        extra_args=extra_args,
         # 全面使用 .env 配置（BASE_URL/API_KEY/MODEL_NAME），覆盖本机继承的 ANTHROPIC_* 环境变量。
         env={
             "ANTHROPIC_BASE_URL": base_url,
