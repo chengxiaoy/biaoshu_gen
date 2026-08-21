@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelResponse, ToolCallPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -211,3 +212,29 @@ def test_body_resumes_from_existing_leaf_files(tmp_path: Path, monkeypatch):
     assert "补生成内容" in (d / "2.2-质量保障.md").read_text(encoding="utf-8")
     assert OK_CONTENT in (d / "1.1-背景现状.md").read_text(encoding="utf-8")  # 未重跑
     assert len(captured) == 1                           # 只补生成缺失的一个
+
+
+def test_body_writes_each_leaf_immediately(tmp_path: Path, monkeypatch):
+    """小节生成即落盘：某小节生成失败（模拟中断）时，已完成的已在盘上。"""
+    monkeypatch.chdir(tmp_path)
+    state = _state(tmp_path)
+
+    def make(output_type, system_prompt, retries=2):
+        async def fn(messages, info: AgentInfo):
+            prompt = _last_user_content(messages)
+            if "质量体系" in prompt:            # 2.2（description 唯一）中途失败；
+                raise RuntimeError("模拟中断")   # 目录树含所有标题，不能用标题当触发词
+            out = {"title": "占位", "content": OK_CONTENT}
+            return ModelResponse(parts=[ToolCallPart(
+                tool_name=info.output_tools[0].name, args=json.dumps(out))])
+        return Agent(model=FunctionModel(fn), output_type=output_type,
+                     system_prompt=system_prompt, retries=retries)
+
+    monkeypatch.setattr(body_mod, "make_agent", make)
+    with pytest.raises(RuntimeError):
+        body_mod.body_node(state)
+
+    d = run_dir(state) / "05_body"
+    for name in ("1.1-背景现状.md", "1.2-建设思路.md", "2.1-进度安排.md"):
+        assert (d / name).exists(), name      # 旧实现：批量写在最后，一个文件都不会有
+    assert not (d / "2.2-质量保障.md").exists()

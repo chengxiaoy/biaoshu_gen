@@ -77,12 +77,11 @@ def body_node(state: BidState) -> dict:
             target_words=leaf.target_words, tree=tree, facts=facts_text, kb=kb_text,
             feedback=state.body_feedback if leaf.id in fix_ids else "",
         )).output
+        f.write_text(result.content, encoding="utf-8")   # 即时落盘：中断后重跑只需补缺
         return leaf, result
 
     with ThreadPoolExecutor(max_workers=get_settings().body_concurrency) as ex:
         results = list(ex.map(gen, targets))
-    for leaf, res in results:
-        _leaf_file(d, leaf).write_text(res.content, encoding="utf-8")
 
     # body.md 由目录树拼装：# 一级 / ## 二级 / ### 三级 + 叶子正文（复用内存中的生成结果，不重读磁盘）
     contents = {leaf.id: res.content for leaf, res in results}
