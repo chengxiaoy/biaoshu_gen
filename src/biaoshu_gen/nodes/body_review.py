@@ -1,4 +1,4 @@
-"""节点 6：正文审核检验（叶子小节粒度：字数 ±20% + 一致性），圈定需修复的小节 id。"""
+"""节点 6：正文审核检验（叶子小节粒度：字数 ±WORD_TOLERANCE 配置 + 一致性），圈定需修复的小节 id。"""
 from pathlib import Path
 
 from ..config import get_settings
@@ -45,6 +45,7 @@ def body_review_node(state: BidState) -> dict:
         invalidation=invalidation_text,
         word_table="\n".join(rows),
         body=body,
+        tolerance=tolerance,
     )).output
 
     leaf_ids = {l.id for l in outline.leaves()}

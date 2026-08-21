@@ -10,7 +10,7 @@ TEMPLATE = """审核以下技术方案正文。
 【废标项+扣分项（正文必须响应且不得触犯）】
 {invalidation}
 
-【各三级小节字数统计（代码已统计，容差 ±20%，超差已由代码标记）】
+【各三级小节字数统计（代码已统计，容差 ±{tolerance:.0%}（WORD_TOLERANCE 配置），超差已由代码标记）】
 {word_table}
 
 检查内容：
@@ -28,6 +28,7 @@ TEMPLATE = """审核以下技术方案正文。
 """
 
 
-def build_user_prompt(facts: str, invalidation: str, word_table: str, body: str) -> str:
+def build_user_prompt(facts: str, invalidation: str, word_table: str, body: str,
+                      tolerance: float) -> str:
     return TEMPLATE.format(facts=facts or "（无）", invalidation=invalidation or "（无）",
-                           word_table=word_table, body=body)
+                           word_table=word_table, body=body, tolerance=tolerance)

@@ -82,7 +82,7 @@ def _review_factory(report: dict, captured: list | None = None):
     return make
 
 
-OK_CONTENT = "内容达标" * 5          # 20 字，命中 20±20% 区间
+OK_CONTENT = "内容达标" * 5          # 20 字，命中 20±50% 区间（默认 WORD_TOLERANCE=0.5）
 
 
 def test_body_writes_leaf_files_and_tree_md(tmp_path: Path, monkeypatch):
@@ -177,6 +177,19 @@ def test_body_review_pass(tmp_path: Path, monkeypatch):
         {"passed": True, "issues": [], "problem_sections": []}))
     updates = br_mod.body_review_node(body_state)
     assert updates["body_review_passed"] is True and updates["body_fix_sections"] == []
+
+
+def test_body_review_prompt_states_configured_tolerance(tmp_path: Path, monkeypatch):
+    """prompt 里的容差来自 WORD_TOLERANCE（默认 0.5 -> ±50%），不是写死的 ±20%。"""
+    monkeypatch.chdir(tmp_path)
+    state = _state(tmp_path)
+    monkeypatch.setattr(body_mod, "make_agent", _factory(OK_CONTENT))
+    body_state = _state(tmp_path, **body_mod.body_node(state))
+    captured: list = []
+    monkeypatch.setattr(br_mod, "make_agent", _review_factory(
+        {"passed": True, "issues": [], "problem_sections": []}, captured))
+    br_mod.body_review_node(body_state)
+    assert "±50%" in captured[0] and "WORD_TOLERANCE" in captured[0]
 
 
 def test_body_prefers_edited_outline_yaml(tmp_path: Path, monkeypatch):
