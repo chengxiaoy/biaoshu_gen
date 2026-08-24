@@ -107,6 +107,18 @@ class AspectReview(BaseModel):
     note: str = ""
 
 
+class StructureHeading(BaseModel):
+    """无标题样式文档重建出的单个章节边界(块序号定界)。"""
+    index: int
+    level: int
+    title: str
+
+
+class StructureOutline(BaseModel):
+    """LLM 结构重建输出:按文档块序排列的章节标题列表。"""
+    headings: list[StructureHeading] = Field(default_factory=list)
+
+
 class ReviewReport(BaseModel):
     """review 节点结构化输出（PydanticAI 单次调用）。
 
