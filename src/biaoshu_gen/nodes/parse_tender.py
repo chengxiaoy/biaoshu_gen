@@ -30,17 +30,33 @@ GROUPS: dict[str, tuple[type[BaseModel], str]] = {
 # 相比 LLM 分类调用：零成本、毫秒级、确定性，且子章节自动继承章主题（如"第五章 评标办法"下的全部小节）。
 _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
     "metadata": ("公告", "投标邀请", "前附表", "中标通知", "投标报价", "投标有效期",
-                 "交货", "质保", "合同草案"),
+                 "交货", "质保", "合同草案",
+                 # 竞争性磋商系术语（真实样本：项目名称/预算全在「第一章 磋商邀请」）
+                 "磋商邀请", "磋商公告", "截止"),
     "requirements": ("采购需求", "采购清单", "项目概况", "技术要求", "实施要求",
                      "建设内容", "交付", "预期成果"),
     "scoring": ("评标", "评分", "资格审查", "评审"),
     "invalidation": ("无效", "废标", "拒收", "扣分", "偏离", "停止评标"),
 }
+# 内容级兜底（仅对列出的组）：关键表格常由非标题段落引导（如「附页6 评审因素和标准」
+# 「第一节 磋商须知前附表」），整表 flush 进上一节，标题路由覆盖不到。
+# 正文含签名特征即强制入组；每个元组的全部子串都命中才算签名
+# （("评分因素","评分标准") 双条件防「演示评分内容」类误报）。
+_CONTENT_SIGNS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "scoring": (
+        ("评审因素和标准",),
+        ("评分因素", "评分标准"),
+    ),
+    "metadata": (
+        ("条款名称", "编列内容规定"),   # 磋商/招标须知前附表（真实截止时间/预算所在）
+    ),
+}
 _MAX_BATCH_CHARS = 24000
 
 
 def classify_sections(sections: list[DocxSection]) -> dict[str, list[int]]:
-    """确定性目录路由：标题或任一上级章节标题命中关键词即入组。"""
+    """确定性目录路由：标题或任一上级章节标题命中关键词即入组；
+    另按正文签名兜底（评分表/前附表挂在无关键词标题下的情形）。"""
     by_group: dict[str, list[int]] = {g: [] for g in GROUPS}
     ancestors: list[tuple[int, str]] = []      # (level, title) 章/节上下文栈
     for i, s in enumerate(sections, 1):
@@ -49,6 +65,9 @@ def classify_sections(sections: list[DocxSection]) -> dict[str, list[int]]:
         titles = [t for _, t in ancestors] + [s.title]
         for group, keywords in _GROUP_KEYWORDS.items():
             if any(k in t for t in titles for k in keywords):
+                by_group[group].append(i)
+        for group, signs_list in _CONTENT_SIGNS.items():
+            if any(all(sign in s.content for sign in signs) for signs in signs_list):
                 by_group[group].append(i)
         if s.level:
             ancestors.append((s.level, s.title))

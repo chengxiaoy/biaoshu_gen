@@ -201,3 +201,44 @@ def test_classify_sections_scoring_keyword_review_factor():
             DocxSection(2, "附页6 评审因素和标准", "y")]
     r = pt.classify_sections(secs)
     assert 2 in r["scoring"]
+
+
+def test_classify_sections_metadata_keyword_negotiation_terms():
+    """竞争性磋商类文件：磋商邀请章及其子节、含截止时间的节应入 metadata 组
+    (真实样本验收发现:项目名称/预算全在「第一章 磋商邀请」,旧关键词只有「投标邀请」)。"""
+    secs = [DocxSection(1, "第一章 磋商邀请", "x"),
+            DocxSection(2, "采购项目基本信息", "y"),
+            DocxSection(3, "采购项目名称：某实训室", "z"),
+            DocxSection(2, "提交首次响应文件的截止时间、磋商时间及地点", "w")]
+    r = pt.classify_sections(secs)
+    assert {1, 2, 3, 4} <= set(r["metadata"])
+
+
+def test_classify_sections_content_fallback_scoring_table():
+    """内容级兜底：评分表挂在无关键词标题下(如「保函的生效」)时,
+    按正文特征(评审因素和标准/评分因素+评分标准表格)强制入 scoring 组;
+    无签名的普通节不误入。"""
+    secs = [
+        DocxSection(1, "保函的生效",
+                    "本保函自我方加盖公章之日起生效。\n\n附页6\n\n评审因素和标准\n\n"
+                    "| 评分因素 | 评分标准 |\n| --- | --- |\n| 报价部分（50分） | 低价优先法计算 |"),
+        DocxSection(1, "争议的解决", "协商不成的向法院起诉。"),
+    ]
+    r = pt.classify_sections(secs)
+    assert 1 in r["scoring"]
+    assert 2 not in r["scoring"]
+
+
+def test_classify_sections_content_fallback_front_attachment_table():
+    """metadata 内容兜底：磋商须知前附表整表挂在无关键词标题(如「第二章 磋商须知」)下,
+    按表头特征(条款名称+编列内容规定)入 metadata 组;普通节不误入。
+    (真实样本验收发现:真实截止时间在前附表,而磋商邀请章里只有空白模板日期。)"""
+    secs = [
+        DocxSection(1, "第二章 磋商须知",
+                    "第一节 磋商须知前附表\n\n| 条款号 | 条款名称 | 编列内容规定 |\n"
+                    "| 第18.1款 | 响应文件的递交时间和地点 | 提交首次响应文件的截止时间：2026年12月29日14:30 |"),
+        DocxSection(2, "资料审查", "供应商需提供营业执照。"),
+    ]
+    r = pt.classify_sections(secs)
+    assert 1 in r["metadata"]
+    assert 2 not in r["metadata"]
