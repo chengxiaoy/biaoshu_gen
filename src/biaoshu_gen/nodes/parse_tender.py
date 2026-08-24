@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
-from ..docx_io import DocxSection, docx_to_sections, sections_to_markdown
+from ..docx_io import DocxSection, docx_to_sections, needs_structure_fallback, sections_to_markdown
 from ..models import make_agent, run_sync
 from ..prompts.parse_tender import SYSTEM_EXTRACT, build_extract_prompt
 from ..schemas import (
@@ -12,6 +12,7 @@ from ..schemas import (
     to_yaml_file,
 )
 from ..state import BidState, run_dir
+from .structure import rebuild_sections
 
 # 每组抽取的输出类型与说明（进入抽取 prompt）
 GROUPS: dict[str, tuple[type[BaseModel], str]] = {
@@ -113,6 +114,12 @@ def _merge(objs: list[BaseModel]) -> BaseModel:
 def parse_tender_node(state: BidState) -> dict:
     sections = docx_to_sections(Path(state.tender_path))
 
+    # ⓪ 结构兜底：标题样式过少/形同虚设时，LLM 重建章节边界（routing.yaml 留痕）
+    mode = "heading"
+    if needs_structure_fallback(sections):
+        sections = rebuild_sections(Path(state.tender_path))
+        mode = "llm_rebuild"
+
     # ① 目录路由：代码侧关键词匹配（含上级章节继承），零 LLM 成本
     by_group = classify_sections(sections)
 
@@ -136,7 +143,8 @@ def parse_tender_node(state: BidState) -> dict:
     d = run_dir(state) / "01_parse"
     d.mkdir(parents=True, exist_ok=True)
     (d / "tender.md").write_text(sections_to_markdown(sections), encoding="utf-8")
-    routing = {g: [f"{i}. {sections[i - 1].title}" for i in idx] for g, idx in by_group.items()}
+    routing = {"structure_mode": mode,
+               **{g: [f"{i}. {sections[i - 1].title}" for i in idx] for g, idx in by_group.items()}}
     (d / "routing.yaml").write_text(
         yaml.safe_dump(routing, allow_unicode=True, sort_keys=False), encoding="utf-8")
     to_yaml_file(results["metadata"], d / "metadata.yaml")

@@ -9,9 +9,11 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from biaoshu_gen.docx_io import DocxSection
 from biaoshu_gen.nodes import DEFAULT_NODES, NODE_NAMES
 from biaoshu_gen.nodes import parse_tender as pt
+from biaoshu_gen.nodes import structure as pt_structure
 from biaoshu_gen.schemas import (
     InvalidationItems, ScoringStandards, TenderMetadata, TenderRequirements,
 )
+from biaoshu_gen.schemas import StructureOutline
 from biaoshu_gen.state import BidState, run_dir
 
 
@@ -125,3 +127,69 @@ def test_parse_tender_keyword_sections_routed_to_invalidation(tmp_path: Path, mo
     monkeypatch.setattr(pt, "make_agent", make)
     updates = pt.parse_tender_node(state)
     assert updates["invalidation"].items[0].kind == "废标项"   # 关键词路由使抽取确实发生
+
+
+def _state_unstructured(tmp_path: Path, monkeypatch) -> BidState:
+    monkeypatch.chdir(tmp_path)
+    tender = tmp_path / "ns.docx"
+    d = Document()
+    d.add_paragraph("第一章 采购需求")
+    d.add_paragraph("系统需支持 1000 并发,提供三年质保。" * 100)   # >2000 字触发兜底
+    d.add_paragraph("第二章 评标办法")
+    d.add_paragraph("价格分采用低价优先法计算。" * 100)
+    d.save(tender)
+    return BidState(run_id="run-ns", tender_path=str(tender))
+
+
+def test_parse_tender_falls_back_to_llm_rebuild(tmp_path: Path, monkeypatch):
+    import yaml as _yaml
+    state = _state_unstructured(tmp_path, monkeypatch)
+
+    def make(output_type, system_prompt, retries=2):
+        async def fn(messages, info: AgentInfo):
+            tool = info.output_tools[0].name if info.output_tools else "final_result"
+            if output_type is StructureOutline:
+                out = {"headings": [
+                    {"index": 0, "level": 1, "title": "第一章 采购需求"},
+                    {"index": 2, "level": 1, "title": "第二章 评标办法"}]}
+            elif output_type is TenderRequirements:
+                out = {"tech_requirements": ["1000 并发"]}
+            else:
+                out = {}
+            return ModelResponse(parts=[ToolCallPart(tool_name=tool, args=json.dumps(out))])
+        return Agent(model=FunctionModel(fn), output_type=output_type,
+                     system_prompt=system_prompt, retries=retries)
+
+    monkeypatch.setattr(pt, "make_agent", make)
+    monkeypatch.setattr(pt_structure, "make_agent", make)   # 兜底编排同样注入假模型
+    updates = pt.parse_tender_node(state)
+
+    d = run_dir(state) / "01_parse"
+    routing = _yaml.safe_load((d / "routing.yaml").read_text(encoding="utf-8"))
+    assert routing["structure_mode"] == "llm_rebuild"
+    md = (d / "tender.md").read_text(encoding="utf-8")
+    assert "# 第一章 采购需求" in md                        # 重建后的层级进入 tender.md
+    assert updates["requirements"].tech_requirements == ["1000 并发"]
+
+
+def test_parse_tender_keeps_heading_mode_when_structured(tmp_path: Path, monkeypatch):
+    import yaml as _yaml
+    state = _state(tmp_path, monkeypatch)                   # 3 个 Heading 的小文档
+    called = {"structure": 0}
+
+    def make(output_type, system_prompt, retries=2):
+        if output_type is StructureOutline:
+            called["structure"] += 1
+        async def fn(messages, info: AgentInfo):
+            tool = info.output_tools[0].name if info.output_tools else "final_result"
+            return ModelResponse(parts=[ToolCallPart(tool_name=tool, args=json.dumps({}))])
+        return Agent(model=FunctionModel(fn), output_type=output_type,
+                     system_prompt=system_prompt, retries=retries)
+
+    monkeypatch.setattr(pt, "make_agent", make)
+    monkeypatch.setattr(pt_structure, "make_agent", make)
+    pt.parse_tender_node(state)
+    routing = _yaml.safe_load(
+        (run_dir(state) / "01_parse" / "routing.yaml").read_text(encoding="utf-8"))
+    assert routing["structure_mode"] == "heading"
+    assert called["structure"] == 0                         # 正常文档不发生结构重建调用

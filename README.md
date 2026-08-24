@@ -79,7 +79,7 @@ poetry run biaoshu init --tender data/tender/软件招标文件.docx --kb data/c
 
 | 阶段 | 命令 | 验收点（data/runs/<run_id>/ 下） |
 |---|---|---|
-| 解析 | `biaoshu parse` | `01_parse/`：metadata/requirements/scoring/invalidation 四 yaml 非空、`routing.yaml` 为关键词路由结果、`tender.md` 全文 |
+| 解析 | `biaoshu parse` | `01_parse/`：metadata/requirements/scoring/invalidation 四 yaml 非空、`routing.yaml` 为关键词路由结果（含 `structure_mode`，无标题样式文档自动 LLM 重建结构）、`tender.md` 全文 |
 | 模板 | `biaoshu template` | `02_template/template.md` 响应文件目录树 + report.md |
 | 事实 | `biaoshu facts` | `03_facts.yaml`（工期/人员/指标/承诺）——**人工控制点**，可编辑 |
 | 目录 | `biaoshu outline` | `04_outline.yaml`：三级提纲（一级章名对齐技术评分项、三级小节带 target_words）——**人工控制点**，可编辑 |
