@@ -183,3 +183,18 @@ def template_has_section(tpl_path: Path, keyword: str) -> bool:
         return False
     doc = Document(str(tpl_path))
     return any(keyword in p.text for p in doc.paragraphs)
+
+
+# —— 无标题样式文档的结构兜底(检测端;重建见 nodes/structure.py)——
+_UNSTRUCTURED_MIN_CHARS = 2000   # 体量低于此值不判"结构缺失",避免小样张浪费 LLM 调用
+_UNSTRUCTURED_MAX_AVG = 8000     # 有标题但平均节长超此值 => 标题形同虚设
+
+
+def needs_structure_fallback(sections: list[DocxSection]) -> bool:
+    """标题节数过少('明显过少')或平均节长过大('不正确')时需要 LLM 重建结构。"""
+    total = sum(len(s.content) for s in sections)
+    if total < _UNSTRUCTURED_MIN_CHARS:
+        return False
+    titled = sum(1 for s in sections if s.level)
+    avg = total / max(len(sections), 1)
+    return titled < 3 or avg > _UNSTRUCTURED_MAX_AVG

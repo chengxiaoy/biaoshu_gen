@@ -4,6 +4,7 @@ from docx import Document
 
 from biaoshu_gen.docx_io import (
     DocxSection, copy_docx, docx_to_markdown, docx_to_sections, markdown_to_docx,
+    needs_structure_fallback,
 )
 
 
@@ -93,3 +94,42 @@ def test_template_has_section(tmp_path: Path):
     d.save(yes)
     assert template_has_section(yes, "偏离") is True
     assert template_has_section(tmp_path / "missing.docx", "偏离") is False
+
+
+def _big_unstructured_docx(path: Path) -> None:
+    """零 Heading 样式的大文档(模拟'不标准格式'招标文件)。"""
+    doc = Document()
+    doc.add_paragraph("第一章 采购需求")            # 普通段落,非 Heading 样式
+    doc.add_paragraph("本系统需支持不少于 1000 并发。" * 80)   # ~1600 字
+    doc.add_paragraph("第二章 评标办法")
+    doc.add_paragraph("价格分采用低价优先法计算。" * 80)
+    doc.save(path)
+
+
+def test_needs_structure_fallback_triggers_on_no_heading(tmp_path: Path):
+    p = tmp_path / "bad.docx"
+    _big_unstructured_docx(p)
+    assert needs_structure_fallback(docx_to_sections(p)) is True
+
+
+def test_needs_structure_fallback_skips_small_docs(tmp_path: Path):
+    """体量不足 _UNSTRUCTURED_MIN_CHARS 的文档不触发(避免小样张浪费 LLM 调用)。"""
+    p = tmp_path / "small.docx"
+    doc = Document()
+    doc.add_paragraph("第一章 招标公告")
+    doc.add_paragraph("项目名称:测试项目")
+    doc.save(p)
+    assert needs_structure_fallback(docx_to_sections(p)) is False
+
+
+def test_needs_structure_fallback_triggers_on_huge_avg_section():
+    """有标题但平均节长超限('不正确')也触发。"""
+    from biaoshu_gen.docx_io import DocxSection as DS
+    direct = [DS(1, "第一章 综合说明", "填充内容。" * 1500),   # 单节 ~9000 字
+              DS(1, "第二章 附则", "略")]
+    assert needs_structure_fallback(direct) is True
+
+
+def test_needs_structure_fallback_false_for_healthy_docs():
+    healthy = [DocxSection(1, f"第{i}章 说明", "内容。" * 200) for i in range(1, 7)]
+    assert needs_structure_fallback(healthy) is False
