@@ -190,3 +190,22 @@ def test_w_ins_revision_text_is_extracted(tmp_path: Path):
     assert "| 技术 38 分 |" not in secs[-1].content      # 管道表格按整表拼接
     md = docx_to_markdown(p)
     assert "技术部分 38 分" in md and "| 技术" in md      # 单元格内 w:ins 文字进表格
+
+
+def test_iter_numbered_blocks_extracts_w_ins_text():
+    """结构兜底路径依赖 stub/md:修订标记(w:ins)文字必须进段落块与表格 stub。"""
+    from biaoshu_gen.docx_io import iter_numbered_blocks
+
+    doc = Document()
+    blank = doc.add_paragraph()                           # w:ins 全空 -> 空段仍跳过
+    _add_ins_text(blank, "")
+    body = doc.add_paragraph()
+    _add_ins_text(body, "报价部分满分 50 分。")            # 段落正文全在 w:ins 内
+    tbl = doc.add_table(rows=1, cols=1)
+    _add_ins_text(tbl.cell(0, 0).paragraphs[0], "技术部分 38 分")
+
+    blocks = iter_numbered_blocks(doc)
+    assert [(b.index, b.kind) for b in blocks] == [(0, "p"), (1, "table")]   # 空 w:ins 不占号
+    assert "报价部分满分 50 分。" in blocks[0].stub
+    assert blocks[0].md == "报价部分满分 50 分。"
+    assert "技术部分 38 分" in blocks[1].stub             # 表格 stub 首行摘要下钻 w:ins

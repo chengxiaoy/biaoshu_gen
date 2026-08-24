@@ -225,13 +225,15 @@ def iter_numbered_blocks(doc: DocumentType) -> list[NumberedBlock]:
     blocks: list[NumberedBlock] = []
     for item in iter_block_items(doc):
         if isinstance(item, Paragraph):
-            text = item.text.strip()
+            text = _full_text(item).strip()
             if not text:
                 continue
             blocks.append(NumberedBlock(len(blocks), "p", text, text))
         else:
             rows = item.rows
-            first = "/".join(c.text.strip() for c in rows[0].cells) if rows else ""
+            first = "/".join(
+                "\n".join(_full_text(p) for p in c.paragraphs).strip()
+                for c in rows[0].cells) if rows else ""
             stub = ("【表格】" + first)[:66]
             blocks.append(NumberedBlock(len(blocks), "table", stub, _table_md(item)))
     return blocks
