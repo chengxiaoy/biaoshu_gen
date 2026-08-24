@@ -52,6 +52,8 @@ def split_by_headings(blocks: list[NumberedBlock],
         if h is not None:
             flush()
             cur = DocxSection(h.level, h.title, "")
+            if b.md.strip() == h.title:
+                continue   # 标题原文已在 title,不再并入 content(避免首行重复)
         cur.content = (cur.content + "\n\n" + b.md).strip()
     flush()
     return secs

@@ -37,6 +37,20 @@ def test_split_by_headings_assigns_content_and_preamble():
     assert "1000 并发" in secs[1].content
     assert "响应时间" in secs[2].content
     assert "质保三年" in secs[3].content
+    # 标题边界块自身文本不得并入 content(否则每节首行把标题重复一遍)
+    assert secs[1].content == "系统需支持 1000 并发。"
+    assert secs[2].content == "响应时间 ≤ 2 秒。"
+    assert secs[3].content == "质保三年。"
+
+
+def test_split_by_headings_keeps_boundary_md_when_title_normalized():
+    """稳妥变体:LLM 对标题截断/归一化(块原文≠title)时,边界块原文仍保留进 content。"""
+    blocks = [_block(i, t) for i, t in enumerate([
+        "第一章 总体要求(含编制说明)", "正文若干。"])]
+    secs = st.split_by_headings(
+        blocks, [StructureHeading(index=0, level=1, title="第一章 总体要求")])
+    assert [(s.level, s.title) for s in secs] == [(1, "第一章 总体要求")]
+    assert secs[0].content == "第一章 总体要求(含编制说明)\n\n正文若干。"
 
 
 def test_split_by_headings_drops_empty_preamble():

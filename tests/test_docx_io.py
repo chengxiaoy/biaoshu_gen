@@ -187,7 +187,7 @@ def test_w_ins_revision_text_is_extracted(tmp_path: Path):
 
     secs = docx_to_sections(p)
     assert "报价部分满分 50 分。" in secs[-1].content
-    assert "| 技术 38 分 |" not in secs[-1].content      # 管道表格按整表拼接
+    assert "| 技术部分 38 分 |" in secs[-1].content      # 管道表格按整表拼接,w:ins 文字在内
     md = docx_to_markdown(p)
     assert "技术部分 38 分" in md and "| 技术" in md      # 单元格内 w:ins 文字进表格
 
