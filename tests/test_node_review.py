@@ -7,6 +7,7 @@ from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from biaoshu_gen.nodes import review as rv
+from biaoshu_gen.prompts.review import build_user_prompt
 from biaoshu_gen.schemas import ReviewReport
 from biaoshu_gen.state import BidState, run_dir
 
@@ -74,3 +75,30 @@ def test_review_fail_below_cap_no_manual_note(tmp_path: Path, monkeypatch):
     assert updates["review_passed"] is False
     text = Path(updates["review_report_path"]).read_text(encoding="utf-8")
     assert "需人工处理" not in text
+
+
+def test_review_human_todos_excluded_from_verdict(tmp_path: Path, monkeypatch):
+    """数据缺失类归 human_todos：单独成节、不进问题清单、不影响 VERDICT。"""
+    state = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(rv, "make_agent", _factory({
+        "passed": True,
+        "aspects": [{"name": "材料齐全性", "passed": True, "note": "结构齐全"}],
+        "issues": [],
+        "human_todos": ["法定代表人身份证号待补", "业绩证明材料待补"]}))
+    updates = rv.review_node(state)
+    assert updates["review_passed"] is True
+    text = Path(updates["review_report_path"]).read_text(encoding="utf-8")
+    assert "待人工补充" in text and "身份证号" in text
+    assert "VERDICT: PASS" in text
+
+
+def test_review_report_human_todos_defaults_empty():
+    """human_todos 缺省为空（兼容旧结构化输出）。"""
+    assert ReviewReport(passed=True).human_todos == []
+
+
+def test_review_prompt_routes_data_gaps_to_human_todos():
+    """prompt 明确数据缺失类的去向：human_todos，不进 issues、不影响结论。"""
+    p = build_user_prompt(draft="d", facts="f", invalidation="i", scoring="s", template="t")
+    assert "human_todos" in p and "数据缺失" in p
+    assert "不得" in p and "issues" in p

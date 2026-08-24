@@ -66,7 +66,7 @@ class Settings(BaseSettings):
 
     # 流程控制参数（设计文档 §7）
     body_review_max_rounds: int = 2
-    revise_max_rounds: int = 2
+    revise_max_rounds: int = 1         # review→revise 只修一轮；数据缺口类已不计入 FAIL，多轮收益低
     word_tolerance: float = 0.5
     harness_max_turns: int = 100
     kb_top_k: int = 5

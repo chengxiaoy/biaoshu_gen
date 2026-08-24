@@ -113,7 +113,7 @@ poetry run pytest        # 无 LLM 成本（假模型 + mock harness）
 | `HARNESS_API_KEY` / `HARNESS_BASE_URL` / `HARNESS_MODEL` | — | harness 三件套（必填，Anthropic 协议端点），不回退 LLM 三件套 |
 | `BODY_CONCURRENCY` | 6 | 正文按三级小节并发生成的并发数 |
 | `BODY_REVIEW_MAX_ROUNDS` | 2 | 正文审核回环上限 |
-| `REVISE_MAX_ROUNDS` | 2 | 审核→修改回环上限 |
+| `REVISE_MAX_ROUNDS` | 1 | 审核→修改回环上限（只修一轮；数据缺失类不计入 FAIL，归入报告「待人工补充」节） |
 | `WORD_TOLERANCE` | 0.5 | 小节字数容差（±50%） |
 | `KB_TOP_K` | 5 | 知识库检索片段数 |
 | `HARNESS_MAX_TURNS` | 100 | harness 节点（Claude SDK）最大轮次 |

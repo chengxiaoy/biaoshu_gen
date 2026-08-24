@@ -41,6 +41,8 @@ def review_node(state: BidState) -> dict:
         f"{'通过' if report.passed else '不通过'}\n\n"
         "## 分项审核\n" + (aspect_lines or "- 无") +
         "\n\n## 问题清单\n" + ("\n".join(f"- {i}" for i in report.issues) or "- 无") +
+        "\n\n## 待人工补充（数据缺失，不计入结论）\n"
+        + ("\n".join(f"- {i}" for i in report.human_todos) or "- 无") +
         "\n\nVERDICT: " + ("PASS" if report.passed else "FAIL") + "\n",
         encoding="utf-8",
     )

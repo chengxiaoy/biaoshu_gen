@@ -6,7 +6,8 @@ TEMPLATE = """{env}
 
 工作区文件：
 - {current}：当前标书草稿 docx（待修改）
-- review_report.md：审核意见（以此为准逐条修订；其中事实与数字已核对过，直接采信，不要重新 grep tender.md 验证）
+- review_report.md：审核意见（以此为准逐条修订；其中事实与数字已核对过，直接采信，不要重新 grep tender.md 验证。
+  「待人工补充」一节是已知数据缺口（证件/联系方式/证明材料等），**不属于修改任务，跳过即可**）
 - _map.txt：草稿结构地图（全部段落 [下标] 前缀 + 各表格内容清单，宿主已生成）
 
 facts/invalidation/scoring 已附于本 prompt 末尾。

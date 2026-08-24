@@ -108,10 +108,15 @@ class AspectReview(BaseModel):
 
 
 class ReviewReport(BaseModel):
-    """review 节点结构化输出（PydanticAI 单次调用）。"""
+    """review 节点结构化输出（PydanticAI 单次调用）。
+
+    issues 仅收可修复草稿缺陷；数据缺失类（证件/联系方式/证明材料等需人工补全）
+    归 human_todos，不计入结论。
+    """
     passed: bool
     aspects: list[AspectReview] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
+    human_todos: list[str] = Field(default_factory=list)
 
 
 def to_yaml_file(model: BaseModel, path: Path) -> None:

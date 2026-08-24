@@ -6,7 +6,7 @@ def test_settings_defaults():
     assert s.llm_model == "deepseek-chat"
     assert s.llm_base_url == "https://api.deepseek.com"
     assert s.body_review_max_rounds == 2
-    assert s.revise_max_rounds == 2
+    assert s.revise_max_rounds == 1
     assert s.word_tolerance == 0.5
     assert str(s.data_dir) == "data"
 
