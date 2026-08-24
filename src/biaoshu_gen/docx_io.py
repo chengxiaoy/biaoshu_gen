@@ -6,8 +6,18 @@ from pathlib import Path
 
 from docx import Document
 from docx.document import Document as DocumentType
+from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
+
+
+def _full_text(para) -> str:
+    """段落全文含修订插入(w:ins)等嵌套 run:遍历全部 w:t 后代节点。
+
+    python-docx 的 paragraph.text 不下钻 w:ins(带修订标记的文档会抽成空文本);
+    只取 w:t 天然跳过 w:delText(删除标记),等价于"按接受全部修订"阅读。
+    """
+    return "".join(n.text or "" for n in para._p.iter() if n.tag == qn("w:t"))
 
 
 def iter_block_items(doc: DocumentType):
@@ -26,7 +36,8 @@ _iter_block_items = iter_block_items   # 兼容旧名（docx_to_sections 仍引�
 def _table_md(table: Table) -> str:
     lines = []
     for row in table.rows:
-        cells = [c.text.replace("\n", " ").replace("|", "/").strip() for c in row.cells]
+        cells = ["\n".join(_full_text(p) for p in c.paragraphs)
+                 .replace("\n", " ").replace("|", "/").strip() for c in row.cells]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -56,7 +67,7 @@ def docx_to_sections(path: Path) -> list[DocxSection]:
 
     for block in _iter_block_items(doc):
         if isinstance(block, Paragraph):
-            text = block.text.strip()
+            text = _full_text(block).strip()
             m = _HEADING_RE.match((block.style.name or "").strip())
             if m and text:
                 if cur is not None:

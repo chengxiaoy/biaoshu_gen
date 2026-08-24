@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 from biaoshu_gen.docx_io import (
     DocxSection, copy_docx, docx_to_markdown, docx_to_sections, markdown_to_docx,
@@ -158,3 +160,33 @@ def test_iter_numbered_blocks_numbers_and_stubs_tables():
     assert "【表格】" in blocks[1].stub and "名称" in blocks[1].stub
     assert "| 名称 | 数量 |" in blocks[1].md and "| 应用软件 A | 1 套 |" in blocks[1].md
     assert blocks[2].md == "以上设备须为全新原装。"
+
+
+def _add_ins_text(container_para_or_cell_para, text: str) -> None:
+    ins = OxmlElement("w:ins")
+    ins.set(qn("w:id"), "1")
+    ins.set(qn("w:author"), "测试")
+    r = OxmlElement("w:r")
+    t = OxmlElement("w:t")
+    t.text = text
+    r.append(t)
+    ins.append(r)
+    container_para_or_cell_para._p.append(ins)
+
+
+def test_w_ins_revision_text_is_extracted(tmp_path: Path):
+    """带修订插入标记的段落与表格文字必须可抽取(样本评分表全在此形态)。"""
+    p = tmp_path / "rev.docx"
+    doc = Document()
+    doc.add_paragraph("第一章 评审因素和标准")           # 普通段落标题
+    body = doc.add_paragraph()
+    _add_ins_text(body, "报价部分满分 50 分。")          # 正文在 w:ins 内
+    tbl = doc.add_table(rows=1, cols=1)
+    _add_ins_text(tbl.cell(0, 0).paragraphs[0], "技术部分 38 分")
+    doc.save(p)
+
+    secs = docx_to_sections(p)
+    assert "报价部分满分 50 分。" in secs[-1].content
+    assert "| 技术 38 分 |" not in secs[-1].content      # 管道表格按整表拼接
+    md = docx_to_markdown(p)
+    assert "技术部分 38 分" in md and "| 技术" in md      # 单元格内 w:ins 文字进表格

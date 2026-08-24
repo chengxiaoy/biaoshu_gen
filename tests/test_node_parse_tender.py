@@ -193,3 +193,11 @@ def test_parse_tender_keeps_heading_mode_when_structured(tmp_path: Path, monkeyp
         (run_dir(state) / "01_parse" / "routing.yaml").read_text(encoding="utf-8"))
     assert routing["structure_mode"] == "heading"
     assert called["structure"] == 0                         # 正常文档不发生结构重建调用
+
+
+def test_classify_sections_scoring_keyword_review_factor():
+    """「评审因素和标准」应入 scoring 组(真实样本验收发现的漏配)。"""
+    secs = [DocxSection(1, "第二章 磋商须知", "x"),
+            DocxSection(2, "附页6 评审因素和标准", "y")]
+    r = pt.classify_sections(secs)
+    assert 2 in r["scoring"]
