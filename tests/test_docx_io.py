@@ -123,10 +123,14 @@ def test_needs_structure_fallback_skips_small_docs(tmp_path: Path):
 
 
 def test_needs_structure_fallback_triggers_on_huge_avg_section():
-    """有标题但平均节长超限('不正确')也触发。"""
+    """有标题但平均节长超限('不正确')也触发。
+
+    构造保证只命中 avg 分支:titled=3(不满足 titled<3),
+    每节 '正文九千字。'×1500=9000 字,total=27000≥2000,avg=9000>8000。
+    """
     from biaoshu_gen.docx_io import DocxSection as DS
-    direct = [DS(1, "第一章 综合说明", "填充内容。" * 1500),   # 单节 ~9000 字
-              DS(1, "第二章 附则", "略")]
+    direct = [DS(1, f"第{i}章 说明", "正文九千字。" * 1500)   # 单节 9000 字
+              for i in range(1, 4)]
     assert needs_structure_fallback(direct) is True
 
 
