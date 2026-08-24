@@ -198,3 +198,29 @@ def needs_structure_fallback(sections: list[DocxSection]) -> bool:
     titled = sum(1 for s in sections if s.level)
     avg = total / max(len(sections), 1)
     return titled < 3 or avg > _UNSTRUCTURED_MAX_AVG
+
+
+@dataclass
+class NumberedBlock:
+    """非空内容块的编号视图:prompt 摘要(stub)与切分全文(md)一体两用。"""
+    index: int          # 非空块序号,与 LLM prompt 编号一致
+    kind: str           # 'p'=段落 | 'table'=表格
+    stub: str           # prompt 用一行摘要;表格压成【表格】+首行内容(≤60 字)
+    md: str             # 切分用完整内容;段落原文 / 整表管道表格
+
+
+def iter_numbered_blocks(doc: DocumentType) -> list[NumberedBlock]:
+    """按文档顺序产出非空块的编号视图(空段跳过,编号连续)。"""
+    blocks: list[NumberedBlock] = []
+    for item in iter_block_items(doc):
+        if isinstance(item, Paragraph):
+            text = item.text.strip()
+            if not text:
+                continue
+            blocks.append(NumberedBlock(len(blocks), "p", text, text))
+        else:
+            rows = item.rows
+            first = "/".join(c.text.strip() for c in rows[0].cells) if rows else ""
+            stub = ("【表格】" + first)[:66]
+            blocks.append(NumberedBlock(len(blocks), "table", stub, _table_md(item)))
+    return blocks

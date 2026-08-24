@@ -137,3 +137,24 @@ def test_needs_structure_fallback_triggers_on_huge_avg_section():
 def test_needs_structure_fallback_false_for_healthy_docs():
     healthy = [DocxSection(1, f"第{i}章 说明", "内容。" * 200) for i in range(1, 7)]
     assert needs_structure_fallback(healthy) is False
+
+
+def test_iter_numbered_blocks_numbers_and_stubs_tables():
+    from biaoshu_gen.docx_io import iter_numbered_blocks
+
+    doc = Document()
+    doc.add_paragraph("")                                # 空段跳过
+    doc.add_paragraph("第一章 采购需求")
+    t = doc.add_table(rows=2, cols=2)
+    t.cell(0, 0).text = "名称"
+    t.cell(0, 1).text = "数量"
+    t.cell(1, 0).text = "应用软件 A"
+    t.cell(1, 1).text = "1 套"
+    doc.add_paragraph("以上设备须为全新原装。")
+
+    blocks = iter_numbered_blocks(doc)
+    assert [(b.index, b.kind) for b in blocks] == [(0, "p"), (1, "table"), (2, "p")]
+    assert blocks[0].stub == "第一章 采购需求"
+    assert "【表格】" in blocks[1].stub and "名称" in blocks[1].stub
+    assert "| 名称 | 数量 |" in blocks[1].md and "| 应用软件 A | 1 套 |" in blocks[1].md
+    assert blocks[2].md == "以上设备须为全新原装。"
