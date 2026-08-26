@@ -163,8 +163,9 @@ class TemplateSplit(BaseModel):
 
 class FillOp(BaseModel):
     """fill_forms 的单个填写操作,字段语义与 fill_skill.run_fill_plan 的 plan 条目一致。"""
-    op: str                            # blank / replace / cell / picture / append
+    op: str                            # blank / label / replace / cell / picture / append
     prefix: str = ""                   # 锚定段落前缀
+    label: str = ""                    # label op:标签(段中部亦可,填全部命中)
     table_header: list[str] = Field(default_factory=list)   # cell 按表头定位(优先)
     table: int | None = None           # cell 按下标定位(无表头时)
     row: int = 0

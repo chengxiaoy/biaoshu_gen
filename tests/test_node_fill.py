@@ -302,3 +302,24 @@ def test_fill_forms_falls_back_to_whole_template_without_part(tmp_path: Path, mo
     updates = ff.fill_forms_node(state)
     doc = Document(updates["forms_docx_path"])
     assert doc.tables[0].cell(1, 1).text == "工业机器人"          # 整模板为底稿执行成功
+
+
+def test_fill_forms_fix_round_replays_on_fresh_base(tmp_path, monkeypatch):
+    """修复轮重放须从预填底稿重置:否则首轮成功的 blank 在改写后的底稿上
+    找不到下划线,报错永不收敛(真实样本 E2E 踩过:轮次耗尽仍 2 条错)。"""
+    from docx import Document
+
+    state = _forms_state(tmp_path, monkeypatch)
+    good = {"op": "blank", "prefix": "项目名称：", "value": "演示项目"}
+    bad = {"op": "blank", "prefix": "不存在的段落：", "value": "x"}
+    fixed = {"op": "cell", "table_header": ["序号", "名称"], "row": 1, "col": 1,
+             "value": "工业机器人"}
+    # 第一轮:好 op + 坏 op;第二轮:同一个好 op + 修正 op(LLM 只删坏条目)
+    make = _fake_fill_make([{"plan": [good, bad]}, {"plan": [good, fixed]}])
+    monkeypatch.setattr(ff, "make_agent", make)
+
+    updates = ff.fill_forms_node(state)
+    assert len(make.calls) == 2
+    doc = Document(updates["forms_docx_path"])
+    assert any("演示项目" in p.text for p in doc.paragraphs)     # 好 op 重放成功
+    assert doc.tables[0].cell(1, 1).text == "工业机器人"          # 修正 op 执行成功

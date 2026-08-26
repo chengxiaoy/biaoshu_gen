@@ -133,3 +133,29 @@ def test_dump_fill_points(tmp_path: Path):
     d = Document(str(path))
     text = dump_fill_points(d)
     assert "项目名称" in text and "[T0]" in text and "名称" in text
+
+
+def test_run_fill_plan_label_op_fills_mid_paragraph_blanks(tmp_path: Path):
+    """label op:按标签填段中部填空(采购代理编号:__ 项目名称:__ 同段),填全部命中;
+    未命中报错收集。"""
+    from docx import Document
+
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("采购代理编号：")
+    p.add_run("＿＿＿")
+    p.add_run("  项目名称：")
+    p.add_run("＿＿＿")
+    src = tmp_path / "t.docx"
+    d.save(src)
+
+    plan = [{"op": "label", "label": "项目名称：", "value": "演示项目"}]
+    out = tmp_path / "out.docx"
+    errors = run_fill_plan(str(src), str(out), plan)
+    assert errors == []
+    texts = [x.text for x in Document(str(out)).paragraphs]
+    assert texts[0] == "采购代理编号：＿＿＿  项目名称：演示项目＿＿"  # 只填标签命中的空,留余线
+
+    errors2 = run_fill_plan(str(src), str(tmp_path / "o2.docx"),
+                            [{"op": "label", "label": "不存在的标签：", "value": "X"}])
+    assert len(errors2) == 1 and "不存在的标签" in errors2[0]

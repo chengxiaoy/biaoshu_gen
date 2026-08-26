@@ -81,6 +81,60 @@ def fill_blank(doc, prefix: str, value: str) -> Paragraph:
     return p
 
 
+def fill_label_blank(doc, label: str, value: str) -> int:
+    """段内**任意位置**按标签填其后的第一个填空（含段中部，如「编号：__ 名称：__」同段），返回填写处数。
+
+    与 fill_all_blanks（只认段首）互补：label op 的底层原语。
+    标签边界护栏同预填：标签前须是段首/分隔符/括号/空白/下划线，防前缀误中。
+    """
+    n = 0
+    for p in doc.paragraphs:
+        text = p.text
+        pos = 0
+        while True:
+            idx = text.find(label, pos)
+            if idx < 0:
+                break
+            pos = idx + len(label)
+            if idx > 0 and text[idx - 1] not in _BOUNDARY_CHARS:
+                continue                       # 边界不符（如「投标人地址」误中「投标人」）
+            if _fill_blank_after(p, idx + len(label), value):
+                n += 1
+                text = p.text                  # 段文本已变,重找后续标签
+                pos = idx + len(label) + len(value)
+    return n
+
+
+def _fill_blank_after(p: Paragraph, q: int, value: str) -> bool:
+    """在段落第 q 个字符处起填空：跳过空白后须是下划线字符段或带下划线的空白 run。"""
+    # run -> 字符区间映射
+    spans = []
+    start = 0
+    for r in p.runs:
+        t = r.text or ""
+        spans.append((start, start + len(t), r))
+        start += len(t)
+    # 跳过标签与空位之间的空白
+    while q < start and p.text[q] in " \t":
+        q += 1
+    for s, e, r in spans:
+        if s <= q < e or (q == s == e):        # 空 run 也可能是空位 run
+            off = q - s
+            t = r.text or ""
+            rest = t[off:]
+            if rest and set(rest) <= UNDERLINE_CHARS:          # 下划线字符段:值+余线
+                r.text = t[:off] + value + "＿＿" + t[off + len(rest):]
+                return True
+            if not rest.strip() and _is_underlined(r) and rest:  # 带下划线的空白 run
+                r.text = value + "  "
+                return True
+            if not t and _is_underlined(r) and q == s:          # 空 run 空位
+                r.text = value + "  "
+                return True
+            return False
+    return False
+
+
 def fill_all_blanks(doc, prefix: str, value: str) -> int:
     """把**所有**以 prefix 开头的段落的填空线都填上 value，返回填写段数（预填已知值用）。
 
@@ -202,6 +256,7 @@ def run_fill_plan(template: str, output: str, plan: list[dict]) -> list[str]:
 
     plan 条目（op 必填）：
       {"op":"blank","prefix":"项目名称：","value":"X"}                 # 下划线填空
+      {"op":"label","label":"项目名称：","value":"X"}                  # 按标签填空(段中部亦可,填全部命中)
       {"op":"replace","prefix":"致：","old":"（采购人）","new":"X"}      # 段内替换
       {"op":"cell","table":0,"row":1,"col":2,"value":"X"}              # 按下标填格
       {"op":"cell","table_header":["序号","名称"],"row":1,"col":1,...} # 按表头定位填格
@@ -215,6 +270,10 @@ def run_fill_plan(template: str, output: str, plan: list[dict]) -> list[str]:
             kind = op["op"]
             if kind == "blank":
                 fill_blank(doc, op["prefix"], op["value"])
+            elif kind == "label":
+                n = fill_label_blank(doc, op["label"], op["value"])
+                if n == 0:
+                    raise RuntimeError("未命中任何带该标签的填空；请核对模板文本")
             elif kind == "replace":
                 replace_in_para(doc, op["prefix"], op["old"], op["new"])
             elif kind == "cell":
@@ -230,6 +289,7 @@ def run_fill_plan(template: str, output: str, plan: list[dict]) -> list[str]:
             else:
                 raise RuntimeError(f"未知 op: {kind}")
         except Exception as e:              # 收集错误继续执行，供一次修正
-            errors.append(f"[{i}] {op.get('op')} {op.get('prefix', op.get('table_header', ''))}: {e}")
+            head = op.get("prefix") or op.get("label") or op.get("table_header", "")
+            errors.append(f"[{i}] {op.get('op')} {head}: {e}")
     doc.save(output)
     return errors

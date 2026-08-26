@@ -20,13 +20,29 @@ from ..prompts.fill_forms import SYSTEM, build_user_prompt
 from ..schemas import FormsFill
 from ..state import BidState, run_dir
 
-_OP_KINDS = {"blank", "replace", "cell", "picture", "append"}
+_OP_KINDS = {"blank", "label", "replace", "cell", "picture", "append"}
 _PLAN_RETRY = 2      # plan 校验失败重试一次
 _FIX_ROUNDS = 2      # 执行报错修正轮次上限
 
 
 class FormsFillError(RuntimeError):
     """forms 填写失败（plan 校验不过或报错修正轮次耗尽）。"""
+
+
+def _call_llm(agent, prompt: str):
+    """run_sync 包装:网关偶发 finish_reason=error 等异常重试一次,仍失败转 FormsFillError。"""
+    import time as _time
+
+    for attempt in range(2):
+        try:
+            return run_sync(agent, prompt).output
+        except FormsFillError:
+            raise
+        except Exception as e:                 # 网关/端点偶发错误
+            if attempt:
+                raise FormsFillError(f"forms 填写失败：LLM 调用异常（{e}）") from e
+            _time.sleep(5)
+    raise FormsFillError("forms 填写失败：LLM 调用异常")
 
 
 def _validate(result: FormsFill) -> FormsFill:
@@ -53,11 +69,11 @@ def fill_forms_node(state: BidState) -> dict:
     ws = run / "06_fill" / "forms"
     ws.mkdir(parents=True, exist_ok=True)
     out = ws / "forms.docx"
-    shutil.copyfile(tpl_src, out)
-
-    doc = Document(str(out))                    # 只解析一次：预填 + 地图共用
+    base = ws / "标书模板_预填.docx"           # 预填后的干净底稿:修复轮重放前重置用
+    doc = Document(str(tpl_src))              # 只解析一次：预填 + 地图共用
     prefilled = prefill_known(doc, state)
-    doc.save(str(out))
+    doc.save(str(base))
+    shutil.copyfile(base, out)
 
     prompt = (SYSTEM + "\n\n"
               + build_user_prompt(str(out), facts.company_name, facts.legal_person,
@@ -71,7 +87,7 @@ def fill_forms_node(state: BidState) -> dict:
     result: FormsFill | None = None
     err = ""
     for _ in range(_PLAN_RETRY):
-        candidate = run_sync(agent, prompt).output
+        candidate = _call_llm(agent, prompt)
         try:
             result = _validate(candidate)
             break
@@ -85,9 +101,12 @@ def fill_forms_node(state: BidState) -> dict:
     rounds = 0
     while errors and rounds < _FIX_ROUNDS:
         rounds += 1
+        print(f"⚠ forms plan 执行报错 {len(errors)} 条，第 {rounds}/{_FIX_ROUNDS} 轮修正：\n"
+              + "\n".join(f"  - {e}" for e in errors[:10]))
         fix_prompt = prompt + ("\n\n【上次 plan 执行报错，请只修正报错条目，"
                                "输出修正后的完整 plan】\n" + "\n".join(errors[:30]))
-        result = _validate(run_sync(agent, fix_prompt).output)
+        result = _validate(_call_llm(agent, fix_prompt))
+        shutil.copyfile(base, out)             # 重置到预填底稿,整计划干净重放
         errors = run_fill_plan(str(out), str(out), _ops_of(result))
     if errors:
         raise FormsFillError(f"forms 填写失败：报错修正轮次耗尽（仍 {len(errors)} 条，"
