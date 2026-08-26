@@ -219,4 +219,9 @@ def status(run_id: str | None = typer.Option(None, "--run-id")) -> None:
 
 
 def main() -> None:
+    import logging
+    import sys
+
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr,
+                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     app()

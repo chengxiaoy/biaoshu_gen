@@ -41,23 +41,22 @@ def run_sync(agent: Agent, prompt: str):
     每次调用打点(输出类型/重试轮次/耗时/prompt与结果规模)——阶段日志的 LLM 观测面。
     """
     import time as _time
+    import logging
 
+    log = logging.getLogger(__name__)
     label = getattr(getattr(agent, "output_type", None), "__name__", "llm")
     delay = 10.0
     for attempt in range(_TRANSIENT_RETRIES):
         t0 = _time.monotonic()
-        print(f"[llm] {label} 第{attempt + 1}次调用 prompt≈{len(prompt)}字符 …",
-              flush=True)
+        log.info("[llm] %s 第%d次调用 prompt≈%d字符 …", label, attempt + 1, len(prompt))
         try:
             result = agent.run_sync(prompt)
             out = getattr(result, "output", None)
-            size = len(getattr(out, "model_dump_json", lambda **k: "")()) if out else 0
-            print(f"[llm] {label} 完成 {_time.monotonic() - t0:.1f}s 输出≈{size}字符",
-                  flush=True)
+            size = len(out.model_dump_json()) if hasattr(out, "model_dump_json") else 0
+            log.info("[llm] %s 完成 %.1fs 输出≈%d字符", label, _time.monotonic() - t0, size)
             return result
         except _TRANSIENT_ERRORS:
-            print(f"[llm] {label} 瞬态错误 {_time.monotonic() - t0:.1f}s 后重试",
-                  flush=True)
+            log.warning("[llm] %s 瞬态错误 %.1fs 后重试", label, _time.monotonic() - t0)
             if attempt == _TRANSIENT_RETRIES - 1:
                 raise
             time.sleep(delay)

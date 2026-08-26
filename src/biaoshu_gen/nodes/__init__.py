@@ -59,14 +59,16 @@ def soft_fill_fail(name: str, field_default: dict):
 
     def wrap(fn: NodeFn) -> NodeFn:
         def node(state: BidState) -> dict:
+            import logging
             from ..state import run_dir
+            log = logging.getLogger(__name__)
             try:
                 return fn(state)
             except Exception:
-                log = run_dir(state) / "06_fill" / f"{name}.error.log"
-                log.parent.mkdir(parents=True, exist_ok=True)
-                log.write_text(traceback.format_exc(), encoding="utf-8")
-                print(f"⚠ {name} 节点失败,已记 {log},流程继续(产物置空)")
+                errfile = run_dir(state) / "06_fill" / f"{name}.error.log"
+                errfile.parent.mkdir(parents=True, exist_ok=True)
+                errfile.write_text(traceback.format_exc(), encoding="utf-8")
+                log.exception("%s 节点失败,已记 %s,流程继续(产物置空)", name, errfile)
                 return dict(field_default)
         node.__name__ = fn.__name__
         return node

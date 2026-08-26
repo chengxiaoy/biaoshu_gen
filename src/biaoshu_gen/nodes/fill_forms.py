@@ -85,8 +85,9 @@ def fill_forms_node(state: BidState) -> dict:
         prompt += "\n\n" + PREFILL_NOTE + "\n- ".join(prefilled)
 
     agent = make_agent(FormsFill, SYSTEM)
-    print(f"[forms] 底稿={tpl_src} 预填={prefilled or '无'} prompt≈"
-          f"{len(SYSTEM) + len(str(out))}+上下文字符", flush=True)
+    import logging
+    log = logging.getLogger(__name__)
+    log.info("[forms] 底稿=%s 预填=%s", tpl_src, prefilled or "无")
     result: FormsFill | None = None
     err = ""
     for _ in range(_PLAN_RETRY):
@@ -101,8 +102,8 @@ def fill_forms_node(state: BidState) -> dict:
         raise FormsFillError(f"forms 填写失败：两次输出均未通过校验（最后错误：{err}）")
 
     errors = run_fill_plan(str(out), str(out), _ops_of(result))
-    print(f"[forms] plan 共 {len(result.plan)} 条 op,执行报错 {len(errors)} 条"
-          + ("" if not errors else "\n  " + "\n  ".join(errors[:10])), flush=True)
+    log.info("[forms] plan 共 %d 条 op,执行报错 %d 条%s", len(result.plan), len(errors),
+             "" if not errors else "\n  " + "\n  ".join(errors[:10]))
     rounds = 0
     while errors and rounds < _FIX_ROUNDS:
         rounds += 1
@@ -116,5 +117,5 @@ def fill_forms_node(state: BidState) -> dict:
     if errors:
         raise FormsFillError(f"forms 填写失败：报错修正轮次耗尽（仍 {len(errors)} 条，"
                              f"如 {errors[0]}）")
-    print(f"[forms] 产物 {out}({out.stat().st_size} 字节)", flush=True)
+    log.info("[forms] 产物 %s(%d 字节)", out, out.stat().st_size)
     return {"forms_docx_path": str(out)}
