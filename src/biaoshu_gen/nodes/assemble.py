@@ -1,6 +1,10 @@
 """节点 10：拼装标书草稿 docx（纯代码，无 LLM）。
 
-策略：**标题锚定的分段替换**——
+主路径（parts.yaml 存在，四分拆后）：**顺序拼接**——以整模板为样式壳清空 body，
+按 parts.yaml 的文档原序并入各桶：technical 用原始 part 作容器注入 body，
+其余桶取填充产物（跳过的桶用原始 part），part 即精确切分天然无重复。
+
+回退路径（老 run 无 parts.yaml）：**标题锚定的分段替换**——
 - 底稿 = forms.docx（模板壳 + 已填的投标函/报价/资格）> 标书模板.docx > 新建；
 - 技术方案正文：写入底稿"技术部分/技术方案"锚点区间（找不到锚点才追加尾部）；
 - 商务部分/偏离表：在底稿与填充文档中按锚标题定位**同一区间**，整段替换（空壳 → 已填），
@@ -11,14 +15,16 @@
 from pathlib import Path
 
 from docx import Document
+from docx.oxml.ns import qn
 
 from ..docx_io import (
     append_elements_before_sectpr, copy_docx, docx_block_ranges,
     iter_block_items, markdown_to_docx, replace_elements,
 )
 from ..state import BidState, run_dir
+from .split_template import read_parts_yaml
 
-_TECH_KEYWORDS = ("技术方案", "技术部分", "技术标", "技术")
+_TECH_KEYWORDS = ("技术方案", "技术部分", "技术标", "实施方案", "技术")
 
 
 def _find_range(ranges, keywords: tuple[str, ...]):
@@ -70,13 +76,59 @@ def _append_docx_dedup(dest: Document, src: Document, existing: set) -> None:
             dest.element.body.append(el)
 
 
+def _assemble_from_parts(state: BidState, manifest: dict, dest: Path, body_md: str) -> None:
+    """主路径：整模板样式壳清空 body，按文档原序拼接四桶 part。"""
+    tpl = Path(state.template_docx_path)
+    doc = copy_docx(tpl, dest)
+    for el in list(doc.element.body.iterchildren()):
+        if el.tag != qn("w:sectPr"):
+            el.getparent().remove(el)
+
+    filled = {"forms": state.forms_docx_path, "deviation": state.deviation_docx_path,
+              "commercial": state.commercial_docx_path}
+    body_injected = False
+    for bucket in manifest.get("order", []):
+        info = manifest.get("parts", {}).get(bucket) or {}
+        if bucket == "technical":
+            container = info.get("path", "")
+            if not (container and Path(container).exists()):
+                continue
+            part = Document(str(container))            # 技术部分以原始 part 为容器
+            tech = _find_range(docx_block_ranges(part), _TECH_KEYWORDS)
+            if tech is not None:
+                replace_elements(tech.elements[1:], _content_elements(body_md))
+            else:
+                markdown_to_docx(part, body_md)
+            body_injected = True
+            src = part
+        else:
+            src_path = filled.get(bucket) or info.get("path") or ""
+            if not (src_path and Path(src_path).exists()):
+                continue
+            src = Document(str(src_path))
+        elements = [el for el in src.element.body.iterchildren()
+                    if el.tag != qn("w:sectPr")]
+        append_elements_before_sectpr(doc, elements)
+    if not body_injected and body_md:                  # 无技术桶时 body 兜底尾部追加
+        doc.add_page_break()
+        markdown_to_docx(doc, "# 技术方案\n\n" + body_md)
+    doc.save(str(dest))
+
+
 def assemble_node(state: BidState) -> dict:
     out_dir = run_dir(state) / "07_draft"
     out_dir.mkdir(parents=True, exist_ok=True)
     version = state.draft_version + 1
     dest = out_dir / f"标书草稿_v{version}.docx"
+    body_md = Path(state.body_md_path).read_text(encoding="utf-8")
 
-    # 底稿：填好的 forms 优先（避免空模板壳），否则响应模板，否则新建
+    manifest = read_parts_yaml(run_dir(state))
+    if manifest.get("order") and state.template_docx_path and \
+            Path(state.template_docx_path).exists():
+        _assemble_from_parts(state, manifest, dest, body_md)
+        return _finish(state, dest, out_dir, version, body_md)
+
+    # 回退路径：底稿 = 填好的 forms 优先（避免空模板壳），否则响应模板，否则新建
     if state.forms_docx_path and Path(state.forms_docx_path).exists():
         doc = copy_docx(Path(state.forms_docx_path), dest)
     elif state.template_docx_path and Path(state.template_docx_path).exists():
@@ -87,7 +139,6 @@ def assemble_node(state: BidState) -> dict:
             doc.add_heading(f"{state.metadata.project_name} 投标文件", level=0)
 
     # 技术方案正文 -> 锚定"技术部分"区间（保留锚标题，替换区间其余内容）
-    body_md = Path(state.body_md_path).read_text(encoding="utf-8")
     tech = _find_range(docx_block_ranges(doc), _TECH_KEYWORDS)
     if tech is not None:
         replace_elements(tech.elements[1:], _content_elements(body_md))
@@ -115,7 +166,10 @@ def assemble_node(state: BidState) -> dict:
             doc.add_page_break()
             _append_docx_dedup(doc, src, _collect_keys(doc))
     doc.save(str(dest))
+    return _finish(state, dest, out_dir, version, body_md)
 
+
+def _finish(state: BidState, dest: Path, out_dir: Path, version: int, body_md: str) -> dict:
     (out_dir / "latest.txt").write_text(str(version), encoding="utf-8")
     md_path = out_dir / f"标书草稿_v{version}.md"
     md_path.write_text(body_md + "\n\n（已并入填充产物：forms / deviation / commercial docx）\n",

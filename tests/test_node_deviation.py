@@ -141,3 +141,35 @@ def test_node_skips_without_deviation_table(tmp_path, monkeypatch):
     monkeypatch.setattr(dev, "make_agent", boom)
 
     assert dev.deviation_table_node(state) == {"deviation_docx_path": ""}
+
+
+def test_node_uses_deviation_part_when_present(tmp_path, monkeypatch):
+    """template_parts 有 deviation part 时,底稿复制 part(而非整模板)。"""
+    monkeypatch.chdir(tmp_path)
+    part = tmp_path / "偏离表部分.docx"
+    pd = Document()
+    pd.add_paragraph("七、合同条款偏离表")
+    t = pd.add_table(rows=2, cols=5)
+    for i, h in enumerate(_HDR):
+        t.cell(0, i).text = h
+    pd.save(part)
+    whole = tmp_path / "标书模板.docx"
+    wd = Document()
+    wd.add_paragraph("一、磋商响应声明")
+    wd.add_paragraph("七、合同条款偏离表")
+    wt = wd.add_table(rows=2, cols=5)
+    for i, h in enumerate(_HDR):
+        wt.cell(0, i).text = h
+    wd.save(whole)
+    state = BidState(run_id="run-1", tender_path=str(whole),
+                     template_docx_path=str(whole),
+                     template_parts={"deviation": str(part)})
+    one_table = {"tables": [_ROWS["tables"][0]]}               # part 只有一张表
+    make = _fake_make([one_table])
+    monkeypatch.setattr(dev, "make_agent", make)
+
+    updates = dev.deviation_table_node(state)
+    doc = Document(updates["deviation_docx_path"])
+    texts = [p.text for p in doc.paragraphs if p.text.strip()]
+    assert "一、磋商响应声明" not in texts                       # 来自 part,不含 forms 节
+    assert "七、合同条款偏离表" in texts

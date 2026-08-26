@@ -11,7 +11,7 @@ from pathlib import Path
 from docx import Document
 
 from ..docx_io import find_deviation_tables, replace_table_rows, table_md, template_has_section
-from ..fill_context import SECTION_KEYWORDS
+from ..fill_context import SECTION_KEYWORDS, resolve_template_src
 from ..models import make_agent, run_sync       # noqa: F401  (测试 monkeypatch dev.make_agent)
 from ..prompts.deviation_table import SYSTEM, build_table_section, build_user_prompt
 from ..schemas import DeviationTables
@@ -53,10 +53,12 @@ def _read_text(run: Path, *parts: str) -> str:
 
 
 def deviation_table_node(state: BidState) -> dict:
-    if not state.template_docx_path:
+    tpl_src = resolve_template_src(state, "deviation")
+    if not tpl_src:
         print("ℹ 无响应模板，跳过 deviation 节点。")
         return {"deviation_docx_path": ""}
-    if not template_has_section(Path(state.template_docx_path), SECTION_KEYWORDS["deviation"][0]):
+    using_part = tpl_src != (state.template_docx_path or "")
+    if not using_part and not template_has_section(Path(tpl_src), SECTION_KEYWORDS["deviation"][0]):
         print(f"ℹ 响应模板中无「{SECTION_KEYWORDS['deviation'][0]}」，跳过 deviation 节点。")
         return {"deviation_docx_path": ""}
 
@@ -64,7 +66,7 @@ def deviation_table_node(state: BidState) -> dict:
     ws = run / "06_fill" / "deviation"
     ws.mkdir(parents=True, exist_ok=True)
     out = ws / "deviation.docx"
-    shutil.copyfile(state.template_docx_path, out)
+    shutil.copyfile(tpl_src, out)
     doc = Document(str(out))
     found = find_deviation_tables(doc)
     if not found:

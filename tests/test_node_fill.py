@@ -182,3 +182,36 @@ def test_prefill_known_fills_deterministic_values(tmp_path: Path, monkeypatch):
     assert any(t.startswith("投标人（签章）：某某科技") for t in texts)   # mock 企业名已预填
     assert any(t.startswith("法定代表人：法定代表人") for t in texts)
     assert "项目名称×1" in summary and "投标人×1" in summary
+
+
+def test_fill_nodes_use_parts_when_present(tmp_path: Path, monkeypatch):
+    """template_parts 有对应 part 时,工作区 标书模板.docx 复制 part 而非整模板。"""
+    from docx import Document
+
+    state = _with_template(tmp_path, monkeypatch, text="商务部分\n偏离表")
+    # 造 forms part:只含一段表单内容
+    part = tmp_path / "forms_part.docx"
+    pd = Document()
+    pd.add_paragraph("投标函（格式）")
+    pd.save(part)
+    state = state.model_copy(update={"template_parts": {"forms": str(part)}})
+
+    captured = []
+    _patch_fill_harness(monkeypatch, captured)
+    ff.fill_forms_node(state)
+    ws = run_dir(state) / "06_fill" / "forms"
+    texts = [p.text for p in Document(str(ws / "标书模板.docx")).paragraphs if p.text.strip()]
+    assert texts == ["投标函（格式）"]                          # 工作区模板=part 内容
+
+
+def test_fill_falls_back_to_whole_template_without_part(tmp_path: Path, monkeypatch):
+    from docx import Document
+
+    state = _with_template(tmp_path, monkeypatch, text="商务部分\n偏离表")
+    state = state.model_copy(update={"template_parts": {}})    # 无 parts(老 run)
+    captured = []
+    _patch_fill_harness(monkeypatch, captured)
+    ff.fill_forms_node(state)
+    ws = run_dir(state) / "06_fill" / "forms"
+    texts = [p.text for p in Document(str(ws / "标书模板.docx")).paragraphs if p.text.strip()]
+    assert any("商务部分" in t for t in texts)                  # 回退整模板

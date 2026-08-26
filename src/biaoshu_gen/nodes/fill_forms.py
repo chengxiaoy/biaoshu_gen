@@ -20,4 +20,4 @@ def fill_forms_node(state: BidState) -> dict:
         output_name="forms.docx",
         extra_inputs=[(run_dir(state) / "01_parse" / "metadata.yaml", "metadata.yaml"),
                       (run_dir(state) / "03_facts.yaml", "facts.yaml")],
-        system=SYSTEM, build_user_prompt=prompt)
+        system=SYSTEM, build_user_prompt=prompt, part="forms")

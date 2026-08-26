@@ -219,9 +219,11 @@ def prepare_workspace(run_dir: Path, stage_subdir: str,
 
 
 def prepare_agent_workspace(state, subdir: str,
-                            extra_inputs: list[tuple[Path, Path | str]] | None = None) -> Path:
+                            extra_inputs: list[tuple[Path, Path | str]] | None = None,
+                            template_src: str | None = None) -> Path:
     """填充/审核类 harness 节点的标准工作区：
-    基础输入 tender.md + invalidation.yaml + 可选 标书模板.docx，附加调用方输入，生成 kb.md，
+    基础输入 tender.md + invalidation.yaml + 可选 标书模板.docx（默认整模板，
+    可经 template_src 指定为四分拆 part），附加调用方输入，生成 kb.md，
     并投放 fill_skill.py（表格填写/下划线填空/插图原语，供 harness 直接 import）。"""
     from .kb import KnowledgeBase
     from .state import run_dir
@@ -229,8 +231,9 @@ def prepare_agent_workspace(state, subdir: str,
     parse = run_dir(state) / "01_parse"
     inputs = [(parse / "tender.md", "tender.md"),
               (parse / "invalidation.yaml", "invalidation.yaml")]
-    if state.template_docx_path:
-        inputs.append((Path(state.template_docx_path), "标书模板.docx"))
+    tpl = template_src or state.template_docx_path
+    if tpl:
+        inputs.append((Path(tpl), "标书模板.docx"))
     inputs.extend([(Path(p), n) for p, n in (extra_inputs or [])])
     ws = prepare_workspace(run_dir(state), subdir, inputs)
     skill_src = Path(__file__).with_name("fill_skill.py")

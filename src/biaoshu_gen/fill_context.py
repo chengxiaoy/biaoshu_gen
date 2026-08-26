@@ -106,23 +106,34 @@ def build_fill_context(state: BidState, tpl_doc: Document | None = None) -> str:
     return "\n\n".join(parts)
 
 
+def resolve_template_src(state: BidState, part: str | None) -> str:
+    """fill 节点的模板源:优先对应 part(四分拆产物),缺失回退整模板。"""
+    if part and state.template_parts.get(part) and Path(state.template_parts[part]).exists():
+        return state.template_parts[part]
+    return state.template_docx_path or ""
+
+
 def run_fill_node(state: BidState, *, subdir: str, output_field: str, output_name: str,
                   extra_inputs: list[tuple[Path, str]], system: str,
                   build_user_prompt,
-                  required_keyword: str | None = None) -> dict:
+                  required_keyword: str | None = None,
+                  part: str | None = None) -> dict:
     """fill 三节点公共驱动：门槛判断 -> 工作区 -> 预填确定值 -> 预注入上下文 -> harness。
 
     build_user_prompt(output) -> str 由调用方构造（forms 需企业资料）。
+    part 指定四分拆 bucket 时工作区模板用对应 part,缺失回退整模板。
     """
-    if not state.template_docx_path:
+    tpl_src = resolve_template_src(state, part)
+    if not tpl_src:
         print(f"ℹ 无响应模板，跳过 {subdir} 节点。")
         return {output_field: ""}
-    if required_keyword and not template_has_section(Path(state.template_docx_path),
-                                                     required_keyword):
+    using_part = tpl_src != (state.template_docx_path or "")
+    if required_keyword and not using_part and \
+            not template_has_section(Path(tpl_src), required_keyword):
         print(f"ℹ 响应模板中无「{required_keyword}」，跳过 {subdir} 节点。")
         return {output_field: ""}
 
-    ws = prepare_agent_workspace(state, subdir, extra_inputs)
+    ws = prepare_agent_workspace(state, subdir, extra_inputs, template_src=tpl_src)
     out = ws / output_name
     doc = Document(str(ws / "标书模板.docx"))               # 只解析一次：预填 + 地图共用
     prefilled = prefill_known(doc, state)

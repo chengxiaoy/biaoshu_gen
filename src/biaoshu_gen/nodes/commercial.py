@@ -14,4 +14,5 @@ def commercial_node(state: BidState) -> dict:
         extra_inputs=[(run_dir(state) / "01_parse" / "scoring.yaml", "scoring.yaml")],
         system=SYSTEM, build_user_prompt=build_user_prompt,
         required_keyword=SECTION_KEYWORDS["commercial"][0],
+        part="commercial",
     )
