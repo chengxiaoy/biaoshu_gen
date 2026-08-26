@@ -65,4 +65,4 @@ JSON格式要求：
   1. 后续三个节点分别在以上三个不同的文件中操作
   2. 将正文放到技术/实施方案部分docx中
   3. 按照拆分时标记的顺序组合四部分的docx
-- [ ] fill 阶段中的form节点可以参照deviation节点改造提升速度，不再使用harness，
+- [x] fill 阶段中的form节点可以参照deviation节点改造提升速度，不再使用harness，（LLM 直出 FillOp 填写计划 + python 经 run_fill_plan 确定性执行，执行报错带反馈回炉≤2 轮；离开 flash/DSML 不稳定通道）
