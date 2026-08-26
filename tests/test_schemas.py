@@ -60,6 +60,21 @@ def test_template_anchor_end_defaults_to_none():
     assert (a.start_index, a.end_index) == (1, None)
 
 
+def test_deviation_tables_schema_defaults_and_rows():
+    from biaoshu_gen.schemas import DeviationRow, DeviationTables
+
+    t = DeviationTables()
+    assert t.contract_rows == [] and t.requirement_rows == []
+    r = DeviationRow(clause="第12条", requirement="交货期30天",
+                     response="承诺30天", deviation="")
+    assert r.deviation == "无偏离"                    # 空偏离说明归一为无偏离
+    t2 = DeviationTables.model_validate({
+        "contract_rows": [{"clause": "1", "requirement": "q", "response": "a"}],
+        "requirement_rows": [],
+    })
+    assert len(t2.contract_rows) == 1 and t2.contract_rows[0].deviation == "无偏离"
+
+
 def test_extract_template_prompt_renders_block_lines_and_json_rule():
     from biaoshu_gen.prompts.extract_template import build_user_prompt
 

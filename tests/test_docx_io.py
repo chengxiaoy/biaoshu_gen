@@ -275,3 +275,51 @@ def test_clip_docx_excludes_end_boundary(tmp_path: Path):
     texts = [p.text for p in Document(str(dest)).paragraphs]
     assert any("投标函" in x for x in texts)
     assert not any("第八章" in x for x in texts)
+
+
+def _deviation_doc(path):
+    """两块偏离表样本:合同条款偏离表(前标题含'合同')+采购需求偏离表,各带空数据行。"""
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("七、合同条款偏离表")
+    t1 = doc.add_table(rows=2, cols=5)
+    for i, h in enumerate(["序号", "磋商文件章节条款号", "磋商文件要求", "响应文件的应答", "偏离说明"]):
+        t1.cell(0, i).text = h
+    t1.cell(1, 0).text = ""
+    doc.add_paragraph("八、采购需求偏离表")
+    t2 = doc.add_table(rows=3, cols=5)
+    for i, h in enumerate(["序号", "磋商文件章节条款号", "磋商文件要求", "响应文件应答", "偏离说明"]):
+        t2.cell(0, i).text = h
+    doc.add_table(rows=2, cols=3).cell(0, 0).text = "无关表"      # 非偏离表
+    doc.save(path)
+    return doc
+
+
+def test_find_deviation_tables_classifies_by_caption(tmp_path: Path):
+    from biaoshu_gen.docx_io import find_deviation_tables
+
+    p = tmp_path / "tpl.docx"
+    _deviation_doc(p)
+    found = find_deviation_tables(Document(str(p)))
+    assert [kind for _, kind in found] == ["contract", "requirement"]
+    assert len({id(t) for t, _ in found}) == 2                     # 两张不同的表
+
+
+def test_replace_table_rows_keeps_header_and_writes_rows(tmp_path: Path):
+    from biaoshu_gen.docx_io import find_deviation_tables, replace_table_rows
+
+    p = tmp_path / "tpl.docx"
+    _deviation_doc(p)
+    doc = Document(str(p))
+    table, kind = find_deviation_tables(doc)[0]
+    assert kind == "contract"
+    replace_table_rows(table, [["1", "第12条", "交货期30天", "承诺30天交货", "无偏离"],
+                               ["2", "第15条", "质保期3年", "满足", "正偏离"]])
+    doc.save(p)
+    out = Document(str(p))
+    t = find_deviation_tables(out)[0][0]
+    assert [c.text for c in t.rows[0].cells][:2] == ["序号", "磋商文件章节条款号"]   # 表头保留
+    assert len(t.rows) == 3                                        # 1表头+2数据行,旧空行已清
+    assert [c.text for c in t.rows[1].cells] == ["1", "第12条", "交货期30天", "承诺30天交货", "无偏离"]
+    assert t.rows[2].cells[4].text == "正偏离"

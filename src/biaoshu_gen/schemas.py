@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import TypeVar
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -123,6 +123,25 @@ class TemplateAnchor(BaseModel):
     """LLM 定位的响应文件格式章节边界(块序号)。end_index=None 表示到文档末尾。"""
     start_index: int
     end_index: int | None = None
+
+
+class DeviationRow(BaseModel):
+    """偏离表数据行(序号由代码生成,模型不数数)。"""
+    clause: str = ""          # 磋商文件章节条款号
+    requirement: str = ""     # 磋商文件要求(摘原文)
+    response: str = ""        # 响应文件的应答
+    deviation: str = "无偏离"   # 偏离说明
+
+    @field_validator("deviation")
+    @classmethod
+    def _blank_means_none(cls, v: str) -> str:
+        return v if v.strip() else "无偏离"
+
+
+class DeviationTables(BaseModel):
+    """LLM 直出的偏离表填写结果:合同条款/采购需求两类表的数据行。"""
+    contract_rows: list[DeviationRow] = Field(default_factory=list)
+    requirement_rows: list[DeviationRow] = Field(default_factory=list)
 
 
 class ReviewReport(BaseModel):

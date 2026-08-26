@@ -33,7 +33,7 @@ def iter_block_items(doc: DocumentType):
 _iter_block_items = iter_block_items   # 兼容旧名（docx_to_sections 仍引用）
 
 
-def _table_md(table: Table) -> str:
+def table_md(table: Table) -> str:
     lines = []
     for row in table.rows:
         cells = ["\n".join(_full_text(p) for p in c.paragraphs)
@@ -76,7 +76,7 @@ def docx_to_sections(path: Path) -> list[DocxSection]:
             else:
                 flush(text)
         else:
-            flush(_table_md(block))
+            flush(table_md(block))
     if cur is not None:
         sections.append(cur)
     return sections
@@ -238,7 +238,7 @@ def iter_numbered_blocks(doc: DocumentType) -> list[NumberedBlock]:
                 "\n".join(_full_text(p) for p in c.paragraphs).strip()
                 for c in rows[0].cells) if rows else ""
             stub = ("【表格】" + first)[:66]
-            blocks.append(NumberedBlock(len(blocks), "table", stub, _table_md(table), child, el_idx))
+            blocks.append(NumberedBlock(len(blocks), "table", stub, table_md(table), child, el_idx))
     return blocks
 
 
@@ -256,3 +256,37 @@ def clip_docx(src: Path, dest: Path, start_index: int, end_index: int) -> None:
             continue
         el.getparent().remove(el)
     doc.save(str(dest))
+
+
+def find_deviation_tables(doc: DocumentType) -> list[tuple[Table, str]]:
+    """定位偏离表:表头任一列含「偏离」字样;按表前最近非空段落归类。
+
+    kind='contract'(前文含「合同」,即合同条款偏离表)或 'requirement'(采购需求偏离表)。
+    """
+    found: list[tuple[Table, str]] = []
+    caption = ""
+    for block in iter_block_items(doc):
+        if isinstance(block, Paragraph):
+            if block.text.strip():
+                caption = block.text.strip()
+        else:
+            header = [c.text.strip() for c in block.rows[0].cells] if block.rows else []
+            if any("偏离" in h for h in header):
+                kind = "contract" if "合同" in caption else "requirement"
+                found.append((block, kind))
+    return found
+
+
+def replace_table_rows(table: Table, rows: list[list[str]]) -> None:
+    """整表替换数据行:保留表头行与表对象(列宽/表格线/样式),清空其余行后逐行写入。
+
+    单元格按原文档 xlate 语义直接置 text(纯文本,不带格式 run)。
+    """
+    tbl = table._tbl
+    for tr in list(tbl.tr_lst)[1:]:
+        tbl.remove(tr)
+    for values in rows:
+        cells = table.add_row().cells
+        for i, val in enumerate(values):
+            if i < len(cells):
+                cells[i].text = str(val)

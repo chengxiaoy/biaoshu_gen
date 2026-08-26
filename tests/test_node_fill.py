@@ -62,18 +62,17 @@ def _with_template(tmp_path: Path, monkeypatch, text: str = "偏离表") -> BidS
     return state.model_copy(update={"template_docx_path": str(tpl)})
 
 
-def test_three_fill_nodes_isolated_workspaces(tmp_path: Path, monkeypatch):
+def test_harness_fill_nodes_isolated_workspaces(tmp_path: Path, monkeypatch):
+    """harness 家族只剩 forms/commercial；deviation 已非 harness 化（见 test_node_deviation.py）。"""
     state = _with_template(tmp_path, monkeypatch, text="商务部分\n偏离表")
     captured = []
     _patch_fill_harness(monkeypatch, captured)
     u1 = ff.fill_forms_node(state)
-    u2 = dev.deviation_table_node(state)
     u3 = com.commercial_node(state)
 
     assert u1["forms_docx_path"].endswith(str(Path("06_fill/forms/forms.docx")))
-    assert u2["deviation_docx_path"].endswith("deviation.docx")
     assert u3["commercial_docx_path"].endswith("commercial.docx")
-    assert len({c[0] for c in captured}) == 3            # forms + deviation + commercial 工作区隔离
+    assert len({c[0] for c in captured}) == 2            # forms + commercial 工作区隔离
     # 标准工作区内容：tender.md / invalidation.yaml / kb.md
     ws = run_dir(state) / "06_fill" / "forms"
     assert (ws / "tender.md").exists() and (ws / "kb.md").exists()
@@ -81,11 +80,6 @@ def test_three_fill_nodes_isolated_workspaces(tmp_path: Path, monkeypatch):
     # 各节点附加输入正确
     assert (ws / "metadata.yaml").exists() and (ws / "facts.yaml").exists()
     assert (run_dir(state) / "06_fill" / "commercial" / "scoring.yaml").exists()
-    # deviation 工作区须含其 prompt 宣称的文件（scoring/facts）——缺文件会诱导
-    # harness agent 跨目录探查直至放弃（真实样本 E2E 踩过：deviation.docx 未产出）
-    ws_dev = run_dir(state) / "06_fill" / "deviation"
-    assert (ws_dev / "scoring.yaml").exists()
-    assert (ws_dev / "facts.yaml").exists()
 
 
 def test_deviation_skipped_without_template(tmp_path: Path, monkeypatch):
