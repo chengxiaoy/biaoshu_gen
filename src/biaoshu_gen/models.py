@@ -34,6 +34,20 @@ def make_agent(output_type: type[BaseModel], system_prompt: str, retries: int = 
     return Agent(model=model, output_type=output_type, system_prompt=system_prompt, retries=retries)
 
 
+def _dump_llm_io(label: str, kind: str, text: str) -> None:
+    """LLM 全量输入/输出转储到 run/llm_debug/<label>_<seq>_<kind>.txt,日志可指向。"""
+    try:
+        from .config import get_settings
+        root = get_settings().data_dir / "runs"
+        run = (root / ".latest").read_text(encoding="utf-8").strip()
+        d = root / run / "llm_debug"
+        d.mkdir(parents=True, exist_ok=True)
+        seq = len(list(d.glob(f"{label}_*_{kind}.txt"))) + 1
+        (d / f"{label}_{seq}_{kind}.txt").write_text(text, encoding="utf-8")
+    except Exception:
+        pass
+
+
 def run_sync(agent: Agent, prompt: str):
     """执行 agent.run_sync，对瞬态网络错误（连接/超时/限流）指数退避重试。
 
@@ -49,11 +63,15 @@ def run_sync(agent: Agent, prompt: str):
     for attempt in range(_TRANSIENT_RETRIES):
         t0 = _time.monotonic()
         log.info("[llm] %s 第%d次调用 prompt≈%d字符 …", label, attempt + 1, len(prompt))
+        _dump_llm_io(label, "prompt", prompt)
         try:
             result = agent.run_sync(prompt)
             out = getattr(result, "output", None)
+            if hasattr(out, "model_dump_json"):
+                _dump_llm_io(label, "output", out.model_dump_json(indent=2))
             size = len(out.model_dump_json()) if hasattr(out, "model_dump_json") else 0
-            log.info("[llm] %s 完成 %.1fs 输出≈%d字符", label, _time.monotonic() - t0, size)
+            log.info("[llm] %s 完成 %.1fs 输出≈%d字符(全文见 llm_debug/)", label,
+                     _time.monotonic() - t0, size)
             return result
         except _TRANSIENT_ERRORS:
             log.warning("[llm] %s 瞬态错误 %.1fs 后重试", label, _time.monotonic() - t0)
