@@ -13,9 +13,14 @@ from biaoshu_gen.state import BidState, run_dir
 
 
 def _tender(tmp_path: Path) -> Path:
-    """合成招标文件:非格式章节在前,第七章格式章节(段落+表格)在后。"""
+    """合成招标文件:非格式章节在前,第七章格式章节(段落+表格)在后。
+
+    前导空段使 body 子元素下标与块编号错开(空段不编号但占 element_index),
+    确保「blocks[i].element_index 映射」不被「直接拿 i 当元素下标」的退化实现蒙混。
+    """
     p = tmp_path / "tender.docx"
     doc = Document()
+    doc.add_paragraph("")                                            # 空段:块 0 实为元素 1
     doc.add_paragraph("第二章 投标人须知")
     doc.add_paragraph("递交截止时间为开标之日。")
     doc.add_paragraph("第七章 投标文件的格式")
@@ -67,8 +72,8 @@ def test_node_extracts_via_llm_bounds(tmp_path, monkeypatch):
     assert updates["template_docx_path"] == str(tpl)
 
     texts = [p.text for p in Document(str(tpl)).paragraphs]
-    assert any("投标函" in x for x in texts)
-    assert not any("投标人须知" in x for x in texts)                 # 格式章节之前内容被剪掉
+    # 前导空段使块下标(2)≠元素下标(3):错位剪裁会混入上一段「递交截止时间…」,在此被钉死
+    assert texts == ["第七章 投标文件的格式", "投标函（格式）", "兹承诺按招标文件要求投标。"]
     tpl_md = (ws / "template.md").read_text(encoding="utf-8")
     # 合成样本无 Heading 样式 -> derive_template_md 走扁平列表兜底(标题+表格 stub 均应出现)
     assert "第七章 投标文件的格式" in tpl_md and "【表格】" in tpl_md
