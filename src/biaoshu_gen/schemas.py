@@ -161,6 +161,27 @@ class TemplateSplit(BaseModel):
     spans: list[SplitSpan] = Field(default_factory=list)
 
 
+class FillOp(BaseModel):
+    """fill_forms 的单个填写操作,字段语义与 fill_skill.run_fill_plan 的 plan 条目一致。"""
+    op: str                            # blank / replace / cell / picture / append
+    prefix: str = ""                   # 锚定段落前缀
+    table_header: list[str] = Field(default_factory=list)   # cell 按表头定位(优先)
+    table: int | None = None           # cell 按下标定位(无表头时)
+    row: int = 0
+    col: int = 0
+    value: str = ""
+    old: str = ""                      # replace 原文
+    new: str = ""                      # replace 新文
+    img: str = ""                      # picture 图片绝对路径
+    width: float = 0.0                 # picture 宽(英寸)
+    caption: str = ""                  # picture 图注
+
+
+class FormsFill(BaseModel):
+    """LLM 直出的 forms 填写 plan,由 python 执行 run_fill_plan 落盘。"""
+    plan: list[FillOp] = Field(default_factory=list)
+
+
 class ReviewReport(BaseModel):
     """review 节点结构化输出（PydanticAI 单次调用）。
 

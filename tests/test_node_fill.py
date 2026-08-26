@@ -62,24 +62,111 @@ def _with_template(tmp_path: Path, monkeypatch, text: str = "偏离表") -> BidS
     return state.model_copy(update={"template_docx_path": str(tpl)})
 
 
-def test_harness_fill_nodes_isolated_workspaces(tmp_path: Path, monkeypatch):
-    """harness 家族只剩 forms/commercial；deviation 已非 harness 化（见 test_node_deviation.py）。"""
+def _fake_fill_make(responses: list[dict]):
+    """按调用次序返回预设 FormsFill JSON 的假 agent 工厂;记录收到的 prompt。"""
+    import json as _json
+
+    from pydantic_ai import Agent
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    calls: list[str] = []
+
+    def make(output_type, system_prompt, retries=2):
+        def fn(messages, info: AgentInfo):
+            calls.append(messages[-1].parts[-1].content)
+            tool = info.output_tools[0].name if info.output_tools else "final_result"
+            payload = responses[min(len(calls) - 1, len(responses) - 1)]
+            return ModelResponse(parts=[ToolCallPart(tool_name=tool, args=_json.dumps(payload))])
+        return Agent(model=FunctionModel(fn), output_type=output_type,
+                     system_prompt=system_prompt, retries=retries)
+
+    make.calls = calls
+    return make
+
+
+def _forms_state(tmp_path: Path, monkeypatch) -> BidState:
+    """含投标函填空与一览表的响应模板(facts 已 mock 企业资料)。"""
+    monkeypatch.chdir(tmp_path)
+    from docx import Document
+
+    tpl = tmp_path / "标书模板.docx"
+    d = Document()
+    d.add_paragraph("项目名称：__________")
+    t = d.add_table(rows=2, cols=2)
+    t.cell(0, 0).text = "序号"
+    t.cell(0, 1).text = "名称"
+    d.save(tpl)
+    state = _base_state(tmp_path, monkeypatch)
+    from biaoshu_gen.business import ensure_business_fields
+    ensure_business_fields(state)
+    return state.model_copy(update={"template_docx_path": str(tpl)})
+
+
+_PLAN = {"plan": [
+    {"op": "blank", "prefix": "项目名称：", "value": "演示项目"},
+    {"op": "cell", "table_header": ["序号", "名称"], "row": 1, "col": 1, "value": "工业机器人"},
+]}
+
+
+def test_fill_forms_executes_llm_plan(tmp_path: Path, monkeypatch):
+    """非 harness:LLM 直出 plan,python 经 run_fill_plan 确定性执行落盘。"""
+    from docx import Document
+
+    state = _forms_state(tmp_path, monkeypatch)
+    make = _fake_fill_make([_PLAN])
+    monkeypatch.setattr(ff, "make_agent", make)
+
+    updates = ff.fill_forms_node(state)
+    assert updates["forms_docx_path"].endswith(str(Path("06_fill/forms/forms.docx")))
+    doc = Document(updates["forms_docx_path"])
+    assert any("演示项目" in p.text for p in doc.paragraphs)      # 填空已执行
+    assert doc.tables[0].cell(1, 1).text == "工业机器人"           # 表格已执行
+    prompt = make.calls[0]
+    assert "模板可填点地图" in prompt and "项目名称" in prompt       # 地图预注入
+    assert len(make.calls) == 1                                    # 无报错不回炉
+
+
+def test_fill_forms_fixes_errors_from_feedback(tmp_path: Path, monkeypatch):
+    from docx import Document
+
+    state = _forms_state(tmp_path, monkeypatch)
+    bad = {"plan": [{"op": "blank", "prefix": "不存在的段落：", "value": "x"}]}
+    make = _fake_fill_make([bad, _PLAN])
+    monkeypatch.setattr(ff, "make_agent", make)
+
+    updates = ff.fill_forms_node(state)
+    assert len(make.calls) == 2
+    assert "报错" in make.calls[1]                                 # 第二次带执行报错反馈
+    doc = Document(updates["forms_docx_path"])
+    assert doc.tables[0].cell(1, 1).text == "工业机器人"            # 修正后执行成功
+
+
+def test_fill_forms_raises_after_fix_rounds_exhausted(tmp_path, monkeypatch):
+    state = _forms_state(tmp_path, monkeypatch)
+    bad = {"plan": [{"op": "blank", "prefix": "不存在的段落：", "value": "x"}]}
+    make = _fake_fill_make([bad])
+    monkeypatch.setattr(ff, "make_agent", make)
+
+    import pytest
+    with pytest.raises(ff.FormsFillError):
+        ff.fill_forms_node(state)
+    assert len(make.calls) == 3                                    # 初次 + 2 轮修正
+
+
+def test_commercial_only_harness_node_isolated_workspaces(tmp_path: Path, monkeypatch):
+    """harness 家族只剩 commercial;forms/deviation 已非 harness 化(各有独立测试)。"""
     state = _with_template(tmp_path, monkeypatch, text="商务部分\n偏离表")
     captured = []
     _patch_fill_harness(monkeypatch, captured)
-    u1 = ff.fill_forms_node(state)
     u3 = com.commercial_node(state)
 
-    assert u1["forms_docx_path"].endswith(str(Path("06_fill/forms/forms.docx")))
     assert u3["commercial_docx_path"].endswith("commercial.docx")
-    assert len({c[0] for c in captured}) == 2            # forms + commercial 工作区隔离
-    # 标准工作区内容：tender.md / invalidation.yaml / kb.md
-    ws = run_dir(state) / "06_fill" / "forms"
+    assert len({c[0] for c in captured}) == 1
+    ws = run_dir(state) / "06_fill" / "commercial"
     assert (ws / "tender.md").exists() and (ws / "kb.md").exists()
     assert "CMMI5" in (ws / "kb.md").read_text(encoding="utf-8")
-    # 各节点附加输入正确
-    assert (ws / "metadata.yaml").exists() and (ws / "facts.yaml").exists()
-    assert (run_dir(state) / "06_fill" / "commercial" / "scoring.yaml").exists()
+    assert (ws / "scoring.yaml").exists()
 
 
 def test_deviation_skipped_without_template(tmp_path: Path, monkeypatch):
@@ -184,34 +271,34 @@ def test_prefill_known_fills_deterministic_values(tmp_path: Path, monkeypatch):
     assert "项目名称×1" in summary and "投标人×1" in summary
 
 
-def test_fill_nodes_use_parts_when_present(tmp_path: Path, monkeypatch):
-    """template_parts 有对应 part 时,工作区 标书模板.docx 复制 part 而非整模板。"""
+def test_fill_forms_uses_part_when_present(tmp_path: Path, monkeypatch):
+    """template_parts 有 forms part 时,底稿复制 part(而非整模板)。"""
     from docx import Document
 
-    state = _with_template(tmp_path, monkeypatch, text="商务部分\n偏离表")
-    # 造 forms part:只含一段表单内容
-    part = tmp_path / "forms_part.docx"
+    state = _forms_state(tmp_path, monkeypatch)
+    part = tmp_path / "表格填写部分.docx"
     pd = Document()
+    pd.add_paragraph("项目名称：__________")
     pd.add_paragraph("投标函（格式）")
     pd.save(part)
     state = state.model_copy(update={"template_parts": {"forms": str(part)}})
+    plan = {"plan": [{"op": "blank", "prefix": "项目名称：", "value": "演示项目"}]}
+    make = _fake_fill_make([plan])
+    monkeypatch.setattr(ff, "make_agent", make)
 
-    captured = []
-    _patch_fill_harness(monkeypatch, captured)
-    ff.fill_forms_node(state)
-    ws = run_dir(state) / "06_fill" / "forms"
-    texts = [p.text for p in Document(str(ws / "标书模板.docx")).paragraphs if p.text.strip()]
-    assert texts == ["投标函（格式）"]                          # 工作区模板=part 内容
+    updates = ff.fill_forms_node(state)
+    texts = [p.text for p in Document(updates["forms_docx_path"]).paragraphs if p.text.strip()]
+    assert "投标函（格式）" in texts                              # 来自 part
 
 
-def test_fill_falls_back_to_whole_template_without_part(tmp_path: Path, monkeypatch):
+def test_fill_forms_falls_back_to_whole_template_without_part(tmp_path: Path, monkeypatch):
     from docx import Document
 
-    state = _with_template(tmp_path, monkeypatch, text="商务部分\n偏离表")
-    state = state.model_copy(update={"template_parts": {}})    # 无 parts(老 run)
-    captured = []
-    _patch_fill_harness(monkeypatch, captured)
-    ff.fill_forms_node(state)
-    ws = run_dir(state) / "06_fill" / "forms"
-    texts = [p.text for p in Document(str(ws / "标书模板.docx")).paragraphs if p.text.strip()]
-    assert any("商务部分" in t for t in texts)                  # 回退整模板
+    state = _forms_state(tmp_path, monkeypatch)
+    state = state.model_copy(update={"template_parts": {}})     # 无 parts(老 run)
+    make = _fake_fill_make([_PLAN])
+    monkeypatch.setattr(ff, "make_agent", make)
+
+    updates = ff.fill_forms_node(state)
+    doc = Document(updates["forms_docx_path"])
+    assert doc.tables[0].cell(1, 1).text == "工业机器人"          # 整模板为底稿执行成功
