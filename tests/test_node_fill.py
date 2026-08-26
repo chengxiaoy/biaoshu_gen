@@ -323,3 +323,19 @@ def test_fill_forms_fix_round_replays_on_fresh_base(tmp_path, monkeypatch):
     doc = Document(updates["forms_docx_path"])
     assert any("演示项目" in p.text for p in doc.paragraphs)     # 好 op 重放成功
     assert doc.tables[0].cell(1, 1).text == "工业机器人"          # 修正 op 执行成功
+
+
+def test_fill_nodes_soft_fail_in_pipeline(tmp_path, monkeypatch):
+    """管线层软失败:节点抛异常不阻塞,写 06_fill/<节点>.error.log,输出置空。"""
+    from biaoshu_gen.nodes import soft_fill_fail
+
+    monkeypatch.chdir(tmp_path)
+    state = _base_state(tmp_path, monkeypatch)
+
+    def boom(s):
+        raise RuntimeError("模拟节点崩溃")
+    wrapped = soft_fill_fail("fill_forms", {"forms_docx_path": ""})(boom)
+    updates = wrapped(state)
+    assert updates == {"forms_docx_path": ""}
+    errlog = run_dir(state) / "06_fill" / "fill_forms.error.log"
+    assert errlog.exists() and "模拟节点崩溃" in errlog.read_text(encoding="utf-8")

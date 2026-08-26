@@ -47,3 +47,36 @@ def get_nodes(overrides: dict[str, NodeFn] | None = None) -> dict[str, NodeFn]:
     nodes = dict(DEFAULT_NODES)
     nodes.update(overrides or {})
     return nodes
+
+
+def soft_fill_fail(name: str, field_default: dict):
+    """fill 节点软失败包装:异常捕获后写 06_fill/<节点>.error.log,置空输出放行流程。
+
+    用户裁决:fill 节点失败不阻塞管线(不重跑、不中断),失败信息记 log,
+    assemble 对缺失产物天然容错(用原始 part)。
+    """
+    import traceback
+
+    def wrap(fn: NodeFn) -> NodeFn:
+        def node(state: BidState) -> dict:
+            from ..state import run_dir
+            try:
+                return fn(state)
+            except Exception:
+                log = run_dir(state) / "06_fill" / f"{name}.error.log"
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text(traceback.format_exc(), encoding="utf-8")
+                print(f"⚠ {name} 节点失败,已记 {log},流程继续(产物置空)")
+                return dict(field_default)
+        node.__name__ = fn.__name__
+        return node
+    return wrap
+
+
+_fill_soft = {
+    "fill_forms": ({"forms_docx_path": ""}),
+    "deviation_table": ({"deviation_docx_path": ""}),
+    "commercial": ({"commercial_docx_path": ""}),
+}
+for _k, _d in _fill_soft.items():
+    DEFAULT_NODES[_k] = soft_fill_fail(_k, _d)(DEFAULT_NODES[_k])
