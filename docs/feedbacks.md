@@ -59,3 +59,10 @@ JSON格式要求：
 - [x] 在抽取 facts 阶段，就应该阅读响应模板表格部分，提炼出需要的各类信息和名称或者编号，并预置在facts.yaml文件中（facts 节点读取 02_template/标书模板.docx 表格，提炼入 GlobalFacts.template_fields）
 - [x] 在填写表格时，优先使用facts.yaml 设置的企业信息和名称（三 fill prompt 明确取值优先级：template_fields/企业资料 > metadata > kb）
 - [x] 当前fill阶段耗时较长…为填写表格/填空/插入图片 的skill…（已封装 src/biaoshu_gen/fill_skill.py：前缀锚定 fill_blank/fill_cell/replace_in_para/insert_picture_after/WEBP 转码；fill_blank 修复"值附加在下划线之后"——优先填带下划线空白 run/替换下划线字符 run 留余线/复制格式插入带下划线 run；合成模板单测 4 项通过；prepare_agent_workspace 自动投放 skill 到三个 fill 工作区并写入 prompt）
+
+- [x] extract_template 节点当前是使用harness方案，这种方法性能和稳定性都较差，该节点本质是找出模板文件/响应文件 在原始招标文档中的启示和结束锚点，在使用python脚本剪裁就可以了，修改该节点使用非harness方案，并使用@data/tender/软件招标文件.docx 和 @data/tender/标准的招标文件.docx 进行测试（已改 LLM 定界+python 整包副本删区间：块化后单次 PydanticAI 调用返回起止块序号，代码硬校验重试一次封顶；template.md/report.md 由剪裁副本确定性派生零 LLM；随附响应模板存在时直接复制为底稿。两份真实样本验收通过——LLM 定界精确且两次独立运行字节量一致，全量测试 136 passed）
+- [x] 在fill阶段之前 应该先拆分响应模板文件，分别拆分四个部分：偏离表部分，技术/实施方案部分，表格填写部分，其余商务填写部分（template 阶段新增 split_template 节点：有标题按关键词规则归类、无标题 LLM 分段兜底，clip_docx_keep 多区间保留物理拆分产出 parts/ 四份 part+parts.yaml；fill 三节点各用对应 part 缺失回退整模板；assemble 主路径改为按文档原序顺序拼接，锚点匹配/去重兜底退役为无清单回退）
+  1. 后续三个节点分别在以上三个不同的文件中操作
+  2. 将正文放到技术/实施方案部分docx中
+  3. 按照拆分时标记的顺序组合四部分的docx
+- [ ] fill 阶段中的form节点可以参照deviation节点改造提升速度，不再使用harness，
