@@ -38,12 +38,26 @@ def run_sync(agent: Agent, prompt: str):
     """执行 agent.run_sync，对瞬态网络错误（连接/超时/限流）指数退避重试。
 
     OpenRouter 免费档上游限流与跨境网络抖动常见，节点统一经本函数调用。
+    每次调用打点(输出类型/重试轮次/耗时/prompt与结果规模)——阶段日志的 LLM 观测面。
     """
+    import time as _time
+
+    label = getattr(getattr(agent, "output_type", None), "__name__", "llm")
     delay = 10.0
     for attempt in range(_TRANSIENT_RETRIES):
+        t0 = _time.monotonic()
+        print(f"[llm] {label} 第{attempt + 1}次调用 prompt≈{len(prompt)}字符 …",
+              flush=True)
         try:
-            return agent.run_sync(prompt)
+            result = agent.run_sync(prompt)
+            out = getattr(result, "output", None)
+            size = len(getattr(out, "model_dump_json", lambda **k: "")()) if out else 0
+            print(f"[llm] {label} 完成 {_time.monotonic() - t0:.1f}s 输出≈{size}字符",
+                  flush=True)
+            return result
         except _TRANSIENT_ERRORS:
+            print(f"[llm] {label} 瞬态错误 {_time.monotonic() - t0:.1f}s 后重试",
+                  flush=True)
             if attempt == _TRANSIENT_RETRIES - 1:
                 raise
             time.sleep(delay)
