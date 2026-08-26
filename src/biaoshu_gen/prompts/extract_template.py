@@ -1,33 +1,20 @@
-"""投标模板抽取节点 prompt（harness）：从招标文件提取响应文件模板。"""
+"""extract_template 节点 prompt(LLM 定界)：定位响应文件格式章节的起止块。"""
 
-SYSTEM = "你是投标文件结构分析师，负责从招标文件中提取响应文件（标书）的格式模板。"
+SYSTEM = "你是投标文件结构分析师，负责在招标文件中定位响应文件（投标文件）格式章节的边界。"
 
-TEMPLATE = """工作区文件：
-- tender.md：招标文件全文（Markdown）
-- 招标文件.docx：招标文件原件（格式的权威来源）
-{template_line}
+TEMPLATE = """以下是招标文档按顺序编号的内容块（[序号] 内容摘要；表格压缩为一行）：
 
-任务：从招标文件（尤其"投标文件的格式"章节）提取响应文件模板，产出三个文件：
+{blocks_text}
 
-1. 标书模板.docx —— 可填写的响应模板 docx：
-   - 用 python-docx 从 招标文件.docx 中截取"投标文件的格式/响应文件模板"章节的全部内容
-   - 保留原有标题层级、表格结构与签字/盖章占位，不改动格式
-   - 待填内容以空白/占位符呈现，不填写任何投标信息
-2. template.md —— 响应文件模板说明：完整目录树 + 每部分填写要求 + 标注"表格类填写/文档类编写"
-3. report.md —— 用户查阅报告：目录结构、各部分要求摘要、招标文件原文依据
+任务：找出"投标文件/响应文件的格式"章节（即给出投标函、报价表、偏离表等空白格式的章节）的块边界。
 
-要求：
-- 只依据招标文件原文，不得虚构组成部分
-- {template_note}
-- 三个文件均为 UTF-8（docx 除外），完成后必须存在且非空
+判定规则：
+1. start_index：格式章节标题所在块的序号（如「第七章 投标文件的格式」「第五章 响应文件组成」）
+2. end_index：格式章节之后下一个章级标题（第X章）所在块的序号；格式章节直到文档末尾则为 null
+3. 目录页中的条目不是章节标题；正文中引用的章节名不算
+4. 只返回 JSON：{{"start_index": <整数>, "end_index": <整数或null>}}
 """
 
 
-def build_user_prompt(has_template_docx: bool) -> str:
-    if has_template_docx:
-        template_line = "- 投标模板参考.docx：随招标文件提供的响应模板（结构参考）"
-        template_note = "对照 投标模板参考.docx 的结构，在 report.md 中说明与招标要求的对应关系"
-    else:
-        template_line = "-（未随附响应模板 docx）"
-        template_note = "没有随附模板时，完全依据招标文件文字要求与格式章节构建"
-    return TEMPLATE.format(template_line=template_line, template_note=template_note)
+def build_user_prompt(blocks_text: str) -> str:
+    return TEMPLATE.format(blocks_text=blocks_text)

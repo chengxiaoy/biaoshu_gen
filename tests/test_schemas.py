@@ -50,3 +50,19 @@ def test_outline_requires_sections():
         Outline.model_validate({"sections": [], "total_words": 0})
     with pytest.raises(ValidationError):          # 省略字段同样拒绝（默认值不校验的坑）
         Outline.model_validate({"total_words": 0})
+
+
+def test_template_anchor_end_defaults_to_none():
+    from biaoshu_gen.schemas import TemplateAnchor
+
+    assert TemplateAnchor(start_index=3).end_index is None
+    a = TemplateAnchor.model_validate({"start_index": 1, "end_index": None})
+    assert (a.start_index, a.end_index) == (1, None)
+
+
+def test_extract_template_prompt_renders_block_lines_and_json_rule():
+    from biaoshu_gen.prompts.extract_template import build_user_prompt
+
+    p = build_user_prompt("[0] 封面\n[1] 第七章 投标文件的格式")
+    assert "[1] 第七章 投标文件的格式" in p
+    assert '"start_index"' in p and "null" in p     # JSON 输出指令存在且花括号转义渲染成功

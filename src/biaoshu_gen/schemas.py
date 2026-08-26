@@ -119,6 +119,12 @@ class StructureOutline(BaseModel):
     headings: list[StructureHeading] = Field(default_factory=list)
 
 
+class TemplateAnchor(BaseModel):
+    """LLM 定位的响应文件格式章节边界(块序号)。end_index=None 表示到文档末尾。"""
+    start_index: int
+    end_index: int | None = None
+
+
 class ReviewReport(BaseModel):
     """review 节点结构化输出（PydanticAI 单次调用）。
 
