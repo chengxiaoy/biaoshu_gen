@@ -1,4 +1,4 @@
-"""节点注册表：全部 12 节点已实现，get_nodes 供 build_graph 使用。"""
+"""节点注册表：全部 13 节点已实现，get_nodes 供 build_graph 使用。"""
 from collections.abc import Callable
 
 from ..state import BidState
@@ -6,7 +6,7 @@ from ..state import BidState
 NodeFn = Callable[[BidState], dict]
 
 NODE_NAMES = [
-    "parse_tender", "extract_template", "facts", "outline",
+    "parse_tender", "extract_template", "split_template", "facts", "outline",
     "body", "body_review",
     "fill_forms", "deviation_table", "commercial",
     "assemble", "review", "revise",
@@ -14,6 +14,7 @@ NODE_NAMES = [
 
 from .parse_tender import parse_tender_node          # noqa: E402
 from .extract_template import extract_template_node  # noqa: E402
+from .split_template import split_template_node      # noqa: E402
 from .facts import facts_node                        # noqa: E402
 from .outline import outline_node                    # noqa: E402
 from .body import body_node                          # noqa: E402
@@ -28,6 +29,7 @@ from .revise import revise_node                      # noqa: E402
 DEFAULT_NODES: dict[str, NodeFn] = {
     "parse_tender": parse_tender_node,
     "extract_template": extract_template_node,
+    "split_template": split_template_node,
     "facts": facts_node,
     "outline": outline_node,
     "body": body_node,

@@ -56,9 +56,9 @@ def test_stages_stop_and_resume(tmp_path: Path, monkeypatch):
     assert runner.invoke(cli.app, ["parse"]).exit_code == 0
     assert calls == ["parse_tender"]
     assert runner.invoke(cli.app, ["facts"]).exit_code == 0
-    assert calls == ["parse_tender", "extract_template", "facts"]
+    assert calls == ["parse_tender", "extract_template", "split_template", "facts"]
     assert runner.invoke(cli.app, ["template"]).exit_code == 0   # 已完成 -> 不重复执行
-    assert calls == ["parse_tender", "extract_template", "facts"]
+    assert calls == ["parse_tender", "extract_template", "split_template", "facts"]
 
 
 def test_run_all_reaches_end(tmp_path: Path, monkeypatch):

@@ -37,6 +37,7 @@ class BidState(BaseModel):
     forms_docx_path: str = ""
     deviation_docx_path: str = ""
     commercial_docx_path: str = ""
+    template_parts: dict[str, str] = {}    # 模板四分拆:bucket -> part docx 路径
 
     # 07_draft
     draft_docx_path: str = ""

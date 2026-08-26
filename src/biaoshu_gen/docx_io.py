@@ -294,3 +294,20 @@ def replace_table_rows(table: Table, rows: list[list[str]]) -> None:
         for i, val in enumerate(values):
             if i < len(cells):
                 cells[i].text = str(val)
+
+
+def clip_docx_keep(src: Path, dest: Path, keep_indexes: list[int]) -> None:
+    """整包副本多区间保留:只留 keep_indexes 中的 body 子元素(sectPr 永留),其余删除。
+
+    与 clip_docx 同族(保样式/编号定义/页眉页脚),用于把模板按 bucket 物理拆分。
+    """
+    import shutil as _shutil
+
+    _shutil.copyfile(src, dest)
+    doc = Document(str(dest))
+    keep = set(keep_indexes)
+    for i, el in enumerate(doc.element.body.iterchildren()):
+        if i in keep or el.tag == qn("w:sectPr"):
+            continue
+        el.getparent().remove(el)
+    doc.save(str(dest))

@@ -21,7 +21,7 @@ class StageSpec:
 
 STAGES = {
     "parse":    StageSpec(("parse_tender",)),
-    "template": StageSpec(("extract_template",)),
+    "template": StageSpec(("extract_template", "split_template")),
     "facts":    StageSpec(("facts",)),
     "outline":  StageSpec(("outline",)),
     "body":     StageSpec(("body", "body_review"), ("body_review",)),
@@ -58,7 +58,8 @@ def build_graph(node_overrides: dict[str, NodeFn] | None = None,
     for name, fn in get_nodes(node_overrides).items():
         builder.add_node(name, fn)
     builder.add_edge(START, "parse_tender")
-    for a, b in [("parse_tender", "extract_template"), ("extract_template", "facts"),
+    for a, b in [("parse_tender", "extract_template"), ("extract_template", "split_template"),
+                 ("split_template", "facts"),
                  ("facts", "outline"), ("outline", "body"), ("body", "body_review")]:
         builder.add_edge(a, b)
     # langgraph 0.6.11：无 path_map 时运行时按返回值逐元素路由（list 亦可），

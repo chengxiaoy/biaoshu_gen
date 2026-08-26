@@ -43,7 +43,7 @@ def _state(tmp_path: Path, monkeypatch) -> BidState:
 
 
 def test_node_names_registry():
-    assert NODE_NAMES[0] == "parse_tender" and len(NODE_NAMES) == 12
+    assert NODE_NAMES[0] == "parse_tender" and len(NODE_NAMES) == 13
     assert DEFAULT_NODES["parse_tender"] is pt.parse_tender_node
     assert callable(DEFAULT_NODES["extract_template"])  # 未实现 -> stub
 

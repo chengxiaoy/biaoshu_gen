@@ -327,3 +327,27 @@ def test_replace_table_rows_keeps_header_and_writes_rows(tmp_path: Path):
     assert len(t.rows) == 3                                        # 1表头+2数据行,旧空行已清
     assert [c.text for c in t.rows[1].cells] == ["1", "第12条", "交货期30天", "承诺30天交货", "无偏离"]
     assert t.rows[2].cells[4].text == "正偏离"
+
+
+def test_clip_docx_keep_multiple_ranges(tmp_path: Path):
+    """多区间保留:区间外全删,sectPr 永留,区间内段落原样。"""
+    from biaoshu_gen.docx_io import clip_docx_keep, iter_numbered_blocks
+
+    src = tmp_path / "t.docx"
+    doc = Document()
+    for text in ("第五章 响应文件组成", "一、磋商响应声明", "六、项目实施方案",
+                 "七、合同条款偏离表", "八、采购需求偏离表", "十二、最后报价"):
+        doc.add_paragraph(text)
+    doc.save(src)
+
+    probe = Document(str(src))
+    blocks = iter_numbered_blocks(probe)
+    idx = {b.stub: b.element_index for b in blocks}
+    keep = sorted([idx["七、合同条款偏离表"], idx["八、采购需求偏离表"],   # 偏离 bucket
+                   idx["一、磋商响应声明"]])                              # forms bucket
+
+    dest = tmp_path / "part.docx"
+    clip_docx_keep(src, dest, keep)
+    texts = [p.text for p in Document(str(dest)).paragraphs]
+    assert texts == ["一、磋商响应声明", "七、合同条款偏离表", "八、采购需求偏离表"]
+    assert Document(str(dest)).element.body.sectPr is not None

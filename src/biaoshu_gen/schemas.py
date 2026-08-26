@@ -149,6 +149,18 @@ class DeviationTables(BaseModel):
     tables: list[DeviationTableRows] = Field(default_factory=list)
 
 
+class SplitSpan(BaseModel):
+    """无标题模板 LLM 兜底的块区间归属。end_index=None 表示到文档末尾。"""
+    start_index: int
+    end_index: int | None = None
+    bucket: str
+
+
+class TemplateSplit(BaseModel):
+    """LLM 直出的模板拆分归属(spans 之外的块归 commercial)。"""
+    spans: list[SplitSpan] = Field(default_factory=list)
+
+
 class ReviewReport(BaseModel):
     """review 节点结构化输出（PydanticAI 单次调用）。
 
