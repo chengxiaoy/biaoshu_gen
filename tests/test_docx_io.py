@@ -300,13 +300,13 @@ def _deviation_doc(path):
     return doc
 
 
-def test_find_deviation_tables_classifies_by_caption(tmp_path: Path):
+def test_find_deviation_tables_returns_captions(tmp_path: Path):
     from biaoshu_gen.docx_io import find_deviation_tables
 
     p = tmp_path / "tpl.docx"
     _deviation_doc(p)
     found = find_deviation_tables(Document(str(p)))
-    assert [kind for _, kind in found] == ["contract", "requirement"]
+    assert [cap for _, cap in found] == ["七、合同条款偏离表", "八、采购需求偏离表"]
     assert len({id(t) for t, _ in found}) == 2                     # 两张不同的表
 
 
@@ -316,8 +316,8 @@ def test_replace_table_rows_keeps_header_and_writes_rows(tmp_path: Path):
     p = tmp_path / "tpl.docx"
     _deviation_doc(p)
     doc = Document(str(p))
-    table, kind = find_deviation_tables(doc)[0]
-    assert kind == "contract"
+    table, caption = find_deviation_tables(doc)[0]
+    assert caption == "七、合同条款偏离表"
     replace_table_rows(table, [["1", "第12条", "交货期30天", "承诺30天交货", "无偏离"],
                                ["2", "第15条", "质保期3年", "满足", "正偏离"]])
     doc.save(p)

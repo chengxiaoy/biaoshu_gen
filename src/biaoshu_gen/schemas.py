@@ -138,10 +138,15 @@ class DeviationRow(BaseModel):
         return v if v.strip() else "无偏离"
 
 
+class DeviationTableRows(BaseModel):
+    """单张偏离表的填写结果;table_index 对应 prompt 中标注的表序号(1 起)。"""
+    table_index: int
+    rows: list[DeviationRow] = Field(default_factory=list)
+
+
 class DeviationTables(BaseModel):
-    """LLM 直出的偏离表填写结果:合同条款/采购需求两类表的数据行。"""
-    contract_rows: list[DeviationRow] = Field(default_factory=list)
-    requirement_rows: list[DeviationRow] = Field(default_factory=list)
+    """LLM 直出的偏离表填写结果:按模板中实际发现的表动态,不写死类别。"""
+    tables: list[DeviationTableRows] = Field(default_factory=list)
 
 
 class ReviewReport(BaseModel):
