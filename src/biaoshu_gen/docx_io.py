@@ -218,22 +218,41 @@ class NumberedBlock:
     kind: str           # 'p'=段落 | 'table'=表格
     stub: str           # prompt 用一行摘要;表格压成【表格】+首行内容(≤60 字)
     md: str             # 切分用完整内容;段落原文 / 整表管道表格
+    element: object | None = None   # body 子元素引用(extract_template 剪裁映射用)
+    element_index: int = -1         # 该元素在 body 子元素中的下标(空段也计数)
 
 
 def iter_numbered_blocks(doc: DocumentType) -> list[NumberedBlock]:
-    """按文档顺序产出非空块的编号视图(空段跳过,编号连续)。"""
+    """按文档顺序产出非空块的编号视图(空段跳过不编号,element_index 按 body 连续计数)。"""
     blocks: list[NumberedBlock] = []
-    for item in iter_block_items(doc):
-        if isinstance(item, Paragraph):
-            text = _full_text(item).strip()
+    for el_idx, child in enumerate(doc.element.body.iterchildren()):
+        if child.tag == qn("w:p"):
+            text = _full_text(Paragraph(child, doc)).strip()
             if not text:
                 continue
-            blocks.append(NumberedBlock(len(blocks), "p", text, text))
-        else:
-            rows = item.rows
+            blocks.append(NumberedBlock(len(blocks), "p", text, text, child, el_idx))
+        elif child.tag == qn("w:tbl"):
+            table = Table(child, doc)
+            rows = table.rows
             first = "/".join(
                 "\n".join(_full_text(p) for p in c.paragraphs).strip()
                 for c in rows[0].cells) if rows else ""
             stub = ("【表格】" + first)[:66]
-            blocks.append(NumberedBlock(len(blocks), "table", stub, _table_md(item)))
+            blocks.append(NumberedBlock(len(blocks), "table", stub, _table_md(table), child, el_idx))
     return blocks
+
+
+def clip_docx(src: Path, dest: Path, start_index: int, end_index: int) -> None:
+    """整包副本删区间:保 [start,end) 与 sectPr,删其余 body 子元素。
+
+    相比"新建文档拷元素",样式/编号定义/页眉页脚随包保留(fill 阶段同哲学);
+    end_index 独占;sectPr 固定在 body 尾部,永不删除。
+    """
+    shutil.copyfile(src, dest)
+    doc = Document(str(dest))
+    children = list(doc.element.body.iterchildren())
+    for i, el in enumerate(children):
+        if start_index <= i < end_index or el.tag == qn("w:sectPr"):
+            continue
+        el.getparent().remove(el)
+    doc.save(str(dest))

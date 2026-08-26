@@ -209,3 +209,69 @@ def test_iter_numbered_blocks_extracts_w_ins_text():
     assert "报价部分满分 50 分。" in blocks[0].stub
     assert blocks[0].md == "报价部分满分 50 分。"
     assert "技术部分 38 分" in blocks[1].stub             # 表格 stub 首行摘要下钻 w:ins
+
+
+def test_iter_numbered_blocks_records_element_index():
+    from biaoshu_gen.docx_io import iter_numbered_blocks
+
+    doc = Document()
+    doc.add_paragraph("")                        # 空段:跳过不编号,但 body 下标仍占位
+    doc.add_paragraph("第一章 采购需求")
+    t = doc.add_table(rows=1, cols=1)
+    t.cell(0, 0).text = "报价表"
+
+    blocks = iter_numbered_blocks(doc)
+    children = list(doc.element.body.iterchildren())
+    assert [(b.index, b.kind) for b in blocks] == [(0, "p"), (1, "table")]
+    assert blocks[0].element_index == 1          # 空段占位 0,计数不回退
+    assert blocks[0].element is children[1]
+    assert blocks[1].element_index == 2 and blocks[1].element is children[2]
+
+
+def test_clip_docx_keeps_range_and_sectpr(tmp_path: Path):
+    from biaoshu_gen.docx_io import clip_docx, iter_numbered_blocks
+
+    src = tmp_path / "t.docx"
+    doc = Document()
+    doc.add_paragraph("第二章 投标人须知")
+    doc.add_paragraph("须知正文。")
+    doc.add_paragraph("第七章 投标文件的格式")
+    doc.add_paragraph("投标函格式正文。")
+    doc.save(src)
+
+    probe = Document(str(src))
+    blocks = iter_numbered_blocks(probe)
+    start = next(b.element_index for b in blocks if b.stub.startswith("第七章"))
+    end = len(list(probe.element.body.iterchildren()))
+
+    dest = tmp_path / "tpl.docx"
+    clip_docx(src, dest, start, end)
+    out = Document(str(dest))
+    texts = [p.text for p in out.paragraphs]
+    assert any("投标文件的格式" in x for x in texts)
+    assert any("投标函" in x for x in texts)
+    assert not any("投标人须知" in x for x in texts)
+    assert out.element.body.sectPr is not None
+
+
+def test_clip_docx_excludes_end_boundary(tmp_path: Path):
+    """end_index 指向的元素本身不属于模板(独占)。"""
+    from biaoshu_gen.docx_io import clip_docx, iter_numbered_blocks
+
+    src = tmp_path / "t.docx"
+    doc = Document()
+    doc.add_paragraph("第七章 投标文件的格式")
+    doc.add_paragraph("投标函格式正文。")
+    doc.add_paragraph("第八章 其他事项")
+    doc.save(src)
+
+    probe = Document(str(src))
+    blocks = iter_numbered_blocks(probe)
+    start = next(b.element_index for b in blocks if b.stub.startswith("第七章"))
+    end = next(b.element_index for b in blocks if b.stub.startswith("第八章"))
+
+    dest = tmp_path / "tpl.docx"
+    clip_docx(src, dest, start, end)
+    texts = [p.text for p in Document(str(dest)).paragraphs]
+    assert any("投标函" in x for x in texts)
+    assert not any("第八章" in x for x in texts)
