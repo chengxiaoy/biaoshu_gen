@@ -24,7 +24,7 @@ class DeviationFillError(RuntimeError):
     """偏离表填写失败（LLM 两次输出均未通过校验）。"""
 
 
-def _validate(result: DeviationTables) -> DeviationTables:
+def _validate(result: DeviationTables, kinds: set[str]) -> DeviationTables:
     rows = result.contract_rows + result.requirement_rows
     if not rows:
         raise ValueError("两个数组同时为空，至少须填写一类表")
@@ -33,6 +33,10 @@ def _validate(result: DeviationTables) -> DeviationTables:
     for i, r in enumerate(rows):
         if not r.requirement.strip() or not r.response.strip():
             raise ValueError(f"第 {i + 1} 行 requirement/response 为空")
+    for kind, kind_rows in (("contract", result.contract_rows),
+                            ("requirement", result.requirement_rows)):
+        if kind_rows and kind not in kinds:
+            raise ValueError(f"模板中无{kind}类偏离表，{kind}_rows 应为空")
     return result
 
 
@@ -78,10 +82,11 @@ def deviation_table_node(state: BidState) -> dict:
     )
     result: DeviationTables | None = None
     err = ""
+    kinds = set(tables_by_kind)
     for _ in range(_RETRY_TIMES):
         candidate = run_sync(agent, prompt).output
         try:
-            result = _validate(candidate)
+            result = _validate(candidate, kinds)
             break
         except ValueError as exc:
             err = str(exc)

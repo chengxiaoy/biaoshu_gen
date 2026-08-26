@@ -111,6 +111,29 @@ def test_node_raises_after_retry_exhausted(tmp_path, monkeypatch):
     assert len(make.calls) == 2
 
 
+def test_node_rejects_rows_for_absent_table_kind(tmp_path, monkeypatch):
+    """模板只有采购需求偏离表时,contract_rows 非空必须校验失败并带错重试。"""
+    monkeypatch.chdir(tmp_path)
+    tpl = tmp_path / "标书模板.docx"
+    doc = Document()
+    doc.add_paragraph("八、采购需求偏离表")
+    t = doc.add_table(rows=2, cols=5)
+    for i, h in enumerate(_HDR):
+        t.cell(0, i).text = h
+    doc.save(tpl)
+    state = BidState(run_id="run-1", tender_path=str(tpl), template_docx_path=str(tpl))
+    valid = {"contract_rows": [], "requirement_rows": _ROWS["requirement_rows"]}
+    make = _fake_make([_ROWS, valid])                  # 第一次带 contract 行(模板无此表)
+    monkeypatch.setattr(dev, "make_agent", make)
+
+    updates = dev.deviation_table_node(state)
+    assert len(make.calls) == 2
+    assert "无contract类偏离表" in make.calls[1]        # 错误反馈点名缺失类别
+    out = Document(updates["deviation_docx_path"])
+    t2 = find_deviation_tables(out)[0][0]
+    assert len(t2.rows) == 3                            # requirement 行已写入
+
+
 def test_node_skips_without_deviation_table(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     tpl = tmp_path / "标书模板.docx"

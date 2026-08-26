@@ -278,16 +278,20 @@ def test_clip_docx_excludes_end_boundary(tmp_path: Path):
 
 
 def _deviation_doc(path):
-    """两块偏离表样本:合同条款偏离表(前标题含'合同')+采购需求偏离表,各带空数据行。"""
+    """两块偏离表样本:标题与表格之间隔填充行(采购代理编号/包号),复现真实模板结构。"""
     from docx import Document
 
     doc = Document()
     doc.add_paragraph("七、合同条款偏离表")
+    doc.add_paragraph("采购代理编号：")
+    doc.add_paragraph("包号：")
     t1 = doc.add_table(rows=2, cols=5)
     for i, h in enumerate(["序号", "磋商文件章节条款号", "磋商文件要求", "响应文件的应答", "偏离说明"]):
         t1.cell(0, i).text = h
     t1.cell(1, 0).text = ""
     doc.add_paragraph("八、采购需求偏离表")
+    doc.add_paragraph("采购代理编号：")
+    doc.add_paragraph("包号：")
     t2 = doc.add_table(rows=3, cols=5)
     for i, h in enumerate(["序号", "磋商文件章节条款号", "磋商文件要求", "响应文件应答", "偏离说明"]):
         t2.cell(0, i).text = h

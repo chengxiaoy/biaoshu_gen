@@ -259,19 +259,24 @@ def clip_docx(src: Path, dest: Path, start_index: int, end_index: int) -> None:
 
 
 def find_deviation_tables(doc: DocumentType) -> list[tuple[Table, str]]:
-    """定位偏离表:表头任一列含「偏离」字样;按表前最近非空段落归类。
+    """定位偏离表:表头任一列含「偏离」字样;按表前标题段落归类。
 
-    kind='contract'(前文含「合同」,即合同条款偏离表)或 'requirement'(采购需求偏离表)。
+    kind='contract'(合同条款偏离表)或 'requirement'(采购需求偏离表)。
+    真实模板中标题与表格之间常隔「采购代理编号:/包号:」等填充行,故在表前
+    最近若干非空段落的窗口内回溯,优先取含「偏离」的标题段判断是否含「合同」。
     """
     found: list[tuple[Table, str]] = []
-    caption = ""
+    recent: list[str] = []
     for block in iter_block_items(doc):
         if isinstance(block, Paragraph):
             if block.text.strip():
-                caption = block.text.strip()
+                recent.append(block.text.strip())
+                del recent[:-4]                      # 只留最近4段(隔开填充行)
         else:
             header = [c.text.strip() for c in block.rows[0].cells] if block.rows else []
             if any("偏离" in h for h in header):
+                caption = next((t for t in reversed(recent) if "偏离" in t),
+                               recent[-1] if recent else "")
                 kind = "contract" if "合同" in caption else "requirement"
                 found.append((block, kind))
     return found
