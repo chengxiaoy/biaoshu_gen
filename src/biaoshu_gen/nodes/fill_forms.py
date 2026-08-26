@@ -22,7 +22,7 @@ from ..state import BidState, run_dir
 
 _OP_KINDS = {"blank", "label", "replace", "cell", "picture", "append"}
 _PLAN_RETRY = 2      # plan 校验失败重试一次
-_FIX_ROUNDS = 2      # 执行报错修正轮次上限
+_FIX_ROUNDS = 3      # 执行报错修正轮次上限
 
 
 class FormsFillError(RuntimeError):

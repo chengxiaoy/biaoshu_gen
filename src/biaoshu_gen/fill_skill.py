@@ -106,7 +106,7 @@ def fill_label_blank(doc, label: str, value: str) -> int:
 
 
 def _fill_blank_after(p: Paragraph, q: int, value: str) -> bool:
-    """在段落第 q 个字符处起填空：跳过空白后须是下划线字符段或带下划线的空白 run。"""
+    """在段落第 q 个字符处起填空：跳过边界符（冒号/括号/空白）后须是下划线段或下划线空白 run。"""
     # run -> 字符区间映射
     spans = []
     start = 0
@@ -114,8 +114,9 @@ def _fill_blank_after(p: Paragraph, q: int, value: str) -> bool:
         t = r.text or ""
         spans.append((start, start + len(t), r))
         start += len(t)
-    # 跳过标签与空位之间的空白
-    while q < start and p.text[q] in " \t":
+    total = start
+    # 跳过标签后的边界符(LLM 常丢冒号:「采购代理编号」对「采购代理编号：__」)
+    while q < total and p.text[q] in " \t：:（）()":
         q += 1
     for s, e, r in spans:
         if s <= q < e or (q == s == e):        # 空 run 也可能是空位 run
@@ -170,8 +171,11 @@ def replace_in_para(doc, prefix: str, old: str, new: str) -> Paragraph:
 
 
 def fill_cell(doc, table_idx: int, row: int, col: int, text: str):
-    """填表格单元格（保留表格结构）。"""
-    para = doc.tables[table_idx].rows[row].cells[col].paragraphs[0]
+    """填表格单元格（保留表格结构）；行不够时自动加行（货物清单等按需扩表）。"""
+    table = doc.tables[table_idx]
+    while len(table.rows) <= row:
+        table.add_row()
+    para = table.rows[row].cells[col].paragraphs[0]
     if para.runs:
         para.runs[0].text = text
         for r in para.runs[1:]:

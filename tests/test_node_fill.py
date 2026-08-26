@@ -151,7 +151,7 @@ def test_fill_forms_raises_after_fix_rounds_exhausted(tmp_path, monkeypatch):
     import pytest
     with pytest.raises(ff.FormsFillError):
         ff.fill_forms_node(state)
-    assert len(make.calls) == 3                                    # 初次 + 2 轮修正
+    assert len(make.calls) == 4                                    # 初次 + 3 轮修正
 
 
 def test_commercial_only_harness_node_isolated_workspaces(tmp_path: Path, monkeypatch):

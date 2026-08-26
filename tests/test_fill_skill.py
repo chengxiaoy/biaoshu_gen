@@ -159,3 +159,29 @@ def test_run_fill_plan_label_op_fills_mid_paragraph_blanks(tmp_path: Path):
     errors2 = run_fill_plan(str(src), str(tmp_path / "o2.docx"),
                             [{"op": "label", "label": "不存在的标签：", "value": "X"}])
     assert len(errors2) == 1 and "不存在的标签" in errors2[0]
+
+
+def test_label_op_tolerates_missing_colon_and_cell_grows_rows(tmp_path: Path):
+    """label 无冒号也能命中(跳边界符);cell 行不够自动加行。"""
+    from docx import Document
+
+    from biaoshu_gen.fill_skill import run_fill_plan
+
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("采购代理编号：")
+    p.add_run("＿＿＿")
+    t = d.add_table(rows=1, cols=2)
+    t.cell(0, 0).text = "名称"
+    src = tmp_path / "t.docx"
+    d.save(src)
+
+    out = tmp_path / "out.docx"
+    errors = run_fill_plan(str(src), str(out), [
+        {"op": "label", "label": "采购代理编号", "value": "HN-2026-001"},   # 无冒号
+        {"op": "cell", "table_header": ["名称"], "row": 2, "col": 1, "value": "新增行值"},  # 超行
+    ])
+    assert errors == []
+    d2 = Document(str(out))
+    assert "HN-2026-001" in d2.paragraphs[0].text
+    assert len(d2.tables[0].rows) == 3 and d2.tables[0].cell(2, 1).text == "新增行值"
