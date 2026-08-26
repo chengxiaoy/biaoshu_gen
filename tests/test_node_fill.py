@@ -127,22 +127,8 @@ def test_fill_forms_executes_llm_plan(tmp_path: Path, monkeypatch):
     assert len(make.calls) == 1                                    # 无报错不回炉
 
 
-def test_fill_forms_fixes_errors_from_feedback(tmp_path: Path, monkeypatch):
-    from docx import Document
-
-    state = _forms_state(tmp_path, monkeypatch)
-    bad = {"plan": [{"op": "blank", "prefix": "不存在的段落：", "value": "x"}]}
-    make = _fake_fill_make([bad, _PLAN])
-    monkeypatch.setattr(ff, "make_agent", make)
-
-    updates = ff.fill_forms_node(state)
-    assert len(make.calls) == 2
-    assert "报错" in make.calls[1]                                 # 第二次带执行报错反馈
-    doc = Document(updates["forms_docx_path"])
-    assert doc.tables[0].cell(1, 1).text == "工业机器人"            # 修正后执行成功
-
-
-def test_fill_forms_raises_after_fix_rounds_exhausted(tmp_path, monkeypatch):
+def test_fill_forms_fails_fast_on_execution_errors(tmp_path, monkeypatch):
+    """_FIX_ROUNDS=0(用户设定,勿改回):执行报错不回炉,单次即败,由管线软失败放行。"""
     state = _forms_state(tmp_path, monkeypatch)
     bad = {"plan": [{"op": "blank", "prefix": "不存在的段落：", "value": "x"}]}
     make = _fake_fill_make([bad])
@@ -151,7 +137,7 @@ def test_fill_forms_raises_after_fix_rounds_exhausted(tmp_path, monkeypatch):
     import pytest
     with pytest.raises(ff.FormsFillError):
         ff.fill_forms_node(state)
-    assert len(make.calls) == 4                                    # 初次 + 3 轮修正
+    assert len(make.calls) == 1                                    # 单次,无修正轮
 
 
 def test_commercial_only_harness_node_isolated_workspaces(tmp_path: Path, monkeypatch):
@@ -303,26 +289,6 @@ def test_fill_forms_falls_back_to_whole_template_without_part(tmp_path: Path, mo
     doc = Document(updates["forms_docx_path"])
     assert doc.tables[0].cell(1, 1).text == "工业机器人"          # 整模板为底稿执行成功
 
-
-def test_fill_forms_fix_round_replays_on_fresh_base(tmp_path, monkeypatch):
-    """修复轮重放须从预填底稿重置:否则首轮成功的 blank 在改写后的底稿上
-    找不到下划线,报错永不收敛(真实样本 E2E 踩过:轮次耗尽仍 2 条错)。"""
-    from docx import Document
-
-    state = _forms_state(tmp_path, monkeypatch)
-    good = {"op": "blank", "prefix": "项目名称：", "value": "演示项目"}
-    bad = {"op": "blank", "prefix": "不存在的段落：", "value": "x"}
-    fixed = {"op": "cell", "table_header": ["序号", "名称"], "row": 1, "col": 1,
-             "value": "工业机器人"}
-    # 第一轮:好 op + 坏 op;第二轮:同一个好 op + 修正 op(LLM 只删坏条目)
-    make = _fake_fill_make([{"plan": [good, bad]}, {"plan": [good, fixed]}])
-    monkeypatch.setattr(ff, "make_agent", make)
-
-    updates = ff.fill_forms_node(state)
-    assert len(make.calls) == 2
-    doc = Document(updates["forms_docx_path"])
-    assert any("演示项目" in p.text for p in doc.paragraphs)     # 好 op 重放成功
-    assert doc.tables[0].cell(1, 1).text == "工业机器人"          # 修正 op 执行成功
 
 
 def test_fill_nodes_soft_fail_in_pipeline(tmp_path, monkeypatch):

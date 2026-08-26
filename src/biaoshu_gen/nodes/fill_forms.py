@@ -1,7 +1,8 @@
 """节点 7：投标函+报价文件+货物一览表+资格证明文件（非 harness）。
 
-LLM 直出填写 plan（FillOp 列表），python 经 fill_skill.run_fill_plan 执行；
-执行报错回炉修正（≤2 轮）。确定值（项目名称等）仍由代码预填。
+LLM 直出填写 plan（FillOp 列表），python 经 fill_skill.run_fill_plan 单次执行；
+执行报错即失败(管线层软失败放行,不回炉——回炉曾致慢与逐轮丢 op)。
+确定值（项目名称等）仍由代码预填。
 skip gate 与 forms_docx_path 契约不变。
 """
 import shutil
@@ -22,7 +23,7 @@ from ..state import BidState, run_dir
 
 _OP_KINDS = {"blank", "label", "replace", "cell", "picture", "append"}
 _PLAN_RETRY = 2      # plan 校验失败重试一次
-_FIX_ROUNDS = 3      # 执行报错修正轮次上限
+_FIX_ROUNDS = 0      # 执行报错修正轮次上限
 
 
 class FormsFillError(RuntimeError):
