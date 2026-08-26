@@ -81,6 +81,11 @@ def test_three_fill_nodes_isolated_workspaces(tmp_path: Path, monkeypatch):
     # 各节点附加输入正确
     assert (ws / "metadata.yaml").exists() and (ws / "facts.yaml").exists()
     assert (run_dir(state) / "06_fill" / "commercial" / "scoring.yaml").exists()
+    # deviation 工作区须含其 prompt 宣称的文件（scoring/facts）——缺文件会诱导
+    # harness agent 跨目录探查直至放弃（真实样本 E2E 踩过：deviation.docx 未产出）
+    ws_dev = run_dir(state) / "06_fill" / "deviation"
+    assert (ws_dev / "scoring.yaml").exists()
+    assert (ws_dev / "facts.yaml").exists()
 
 
 def test_deviation_skipped_without_template(tmp_path: Path, monkeypatch):
