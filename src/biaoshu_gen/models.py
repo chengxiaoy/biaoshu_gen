@@ -7,7 +7,7 @@ from openai import APIConnectionError, APITimeoutError, RateLimitError
 from pydantic import BaseModel
 
 from pydantic_ai import Agent
-from pydantic_ai.exceptions import ModelAPIError
+from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -16,8 +16,10 @@ from .config import get_settings, runs_root
 log = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT_S = 600.0   # 长 prompt + 慢模型（免费档）需要充裕超时
-# pydantic-ai 会把 openai 的连接/超时/限流错误包装成 ModelAPIError 抛出，故须一并捕获
-_TRANSIENT_ERRORS = (ModelAPIError, APIConnectionError, APITimeoutError, RateLimitError)
+# pydantic-ai 会把 openai 的连接/超时/限流错误包装成 ModelAPIError 抛出，故须一并捕获;
+# UnexpectedModelBehavior=输出两次校验不过——重新采样常可成功(fresh run 实证),按瞬态重试
+_TRANSIENT_ERRORS = (ModelAPIError, APIConnectionError, APITimeoutError, RateLimitError,
+                     UnexpectedModelBehavior)
 _TRANSIENT_RETRIES = 4
 
 
