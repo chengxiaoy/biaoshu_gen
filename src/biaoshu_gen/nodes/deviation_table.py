@@ -11,7 +11,9 @@ from pathlib import Path
 from docx import Document
 
 from ..docx_io import find_deviation_tables, replace_table_rows, table_md, template_has_section
-from ..fill_context import SECTION_KEYWORDS, resolve_template_src
+from ..fill_context import (
+    SECTION_KEYWORDS, merge_extra_entry_fills, resolve_template_src,
+)
 from ..models import make_agent, run_sync       # noqa: F401  (测试 monkeypatch dev.make_agent)
 from ..prompts.deviation_table import SYSTEM, build_table_section, build_user_prompt
 from ..schemas import DeviationTables
@@ -52,7 +54,7 @@ def _read_text(run: Path, *parts: str) -> str:
     return p.read_text(encoding="utf-8") if p.exists() else f"（{p.name} 缺失）"
 
 
-def deviation_table_node(state: BidState) -> dict:
+def _deviation_core(state: BidState) -> dict:
     tpl_src = resolve_template_src(state, "deviation")
     if not tpl_src:
         print("ℹ 无响应模板，跳过 deviation 节点。")
@@ -63,7 +65,7 @@ def deviation_table_node(state: BidState) -> dict:
         return {"deviation_docx_path": ""}
 
     run = run_dir(state)
-    ws = run / "06_fill" / "deviation"
+    ws = run / "06_fill" / (state.fill_ws_key or "deviation")
     ws.mkdir(parents=True, exist_ok=True)
     out = ws / "deviation.docx"
     shutil.copyfile(tpl_src, out)
@@ -105,3 +107,13 @@ def deviation_table_node(state: BidState) -> dict:
         replace_table_rows(table, data)
     doc.save(str(out))
     return {"deviation_docx_path": str(out)}
+
+
+def deviation_table_node(state: BidState) -> dict:
+    updates = _deviation_core(state)
+    if updates.get("deviation_docx_path"):
+        extras = merge_extra_entry_fills(state, "deviation", _deviation_core,
+                                         "deviation_docx_path")
+        if extras:
+            updates["extra_products_deviation"] = extras
+    return updates

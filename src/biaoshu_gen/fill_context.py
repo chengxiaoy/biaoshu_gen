@@ -126,6 +126,44 @@ def resolve_template_src(state: BidState, part: str | None) -> str:
     return state.template_docx_path or ""
 
 
+def merge_extra_entry_fills(state: BidState, bucket: str, core, out_field: str) -> dict:
+    """同桶多区间(parts.yaml 的 entries):首段已由节点主流程填充,
+    其余附加段克隆 state 独立走一遍同一核心函数。
+
+    返回 {run_key: 产物路径} 写入 state 的 extra_products_<bucket>;
+    单个附加段失败不拖垮整体(记 warning,装配回退该段原始 part)。
+    """
+    import logging
+
+    from .nodes.split_template import load_entries, read_parts_yaml   # 延迟导入避免环
+
+    log = logging.getLogger(__name__)
+    prods: dict[str, str] = {}
+    seen_primary = False
+    try:
+        entries = [e for e in load_entries(read_parts_yaml(run_dir(state)))
+                   if e["bucket"] == bucket]
+    except Exception:
+        return prods
+    for e in entries:
+        if not seen_primary:
+            seen_primary = True                                    # 第一条即主流程已处理
+            continue
+        sub = state.model_copy(update={"template_parts": {bucket: e["path"]},
+                                       "fill_ws_key": e["key"]})
+        try:
+            up = core(sub)
+        except Exception as exc:
+            log.warning("[%s] 附加段 %s 填充失败(%s),装配将回退原始 part",
+                        bucket, e["key"], exc)
+            continue
+        if up.get(out_field):
+            prods[e["key"]] = up[out_field]
+    if prods:
+        log.info("[%s] %d 个附加区间已完成独立填充", bucket, len(prods))
+    return prods
+
+
 def run_fill_node(state: BidState, *, subdir: str, output_field: str, output_name: str,
                   extra_inputs: list[tuple[Path, str]], system: str,
                   build_user_prompt,
@@ -140,6 +178,8 @@ def run_fill_node(state: BidState, *, subdir: str, output_field: str, output_nam
     if not tpl_src:
         print(f"ℹ 无响应模板，跳过 {subdir} 节点。")
         return {output_field: ""}
+    if state.fill_ws_key:                       # 同桶附加段:工作区按 run 键隔离
+        subdir = f"06_fill/{state.fill_ws_key}"
     using_part = tpl_src != (state.template_docx_path or "")
     if required_keyword and not using_part and \
             not template_has_section(Path(tpl_src), required_keyword):

@@ -37,7 +37,12 @@ class BidState(BaseModel):
     forms_docx_path: str = ""
     deviation_docx_path: str = ""
     commercial_docx_path: str = ""
-    template_parts: dict[str, str] = {}    # 模板四分拆:bucket -> part docx 路径
+    template_parts: dict[str, str] = {}    # 模板四分拆:bucket -> part docx 路径(各桶首段)
+    # 同桶多区间时附加段的填充产物 run_key -> docx 路径(fill 各写己键,无并行覆盖冲突)
+    fill_ws_key: str = ""                  # 附加段独立工作区名(默认空=主桶目录)
+    extra_products_forms: dict[str, str] = {}
+    extra_products_deviation: dict[str, str] = {}
+    extra_products_commercial: dict[str, str] = {}
 
     # 07_draft
     draft_docx_path: str = ""

@@ -250,3 +250,54 @@ def test_assemble_migrates_images_from_parts(tmp_path: Path, monkeypatch):
     assert rid in draft.part.rels                                # rId 在壳包内注册
     assert draft.part.rels[rid].target_part.blob == _PNG         # 指向同一图片字节
     assert len(draft.inline_shapes) == 1
+
+
+def test_assemble_stitches_interleaved_runs_in_document_order(tmp_path: Path, monkeypatch):
+    """同桶多区间:附加段的独立填充产物按其 first_element_index 插回原位,
+    不再整桶前置——software 大纲乱序(身份证明/授权书跑到投标函前)的回归锁。"""
+    from biaoshu_gen.nodes import split_template as st
+
+    monkeypatch.chdir(tmp_path)
+    d = run_dir(BidState(run_id="run-1"))
+    ws = d / "02_template"
+    ws.mkdir(parents=True)
+    tpl = ws / "标书模板.docx"
+    doc = Document()
+    doc.add_paragraph("第七章 投标文件的格式")           # commercial run1
+    for title in ("投标函及报价文件", "（四）法定代表人身份证明",
+                  "资格证明文件", "六、项目实施方案"):
+        doc.add_heading(title, level=2)
+        doc.add_paragraph(f"{title} 模板正文。")
+    doc.save(tpl)
+    parts = st.split_template_node(
+        BidState(run_id="run-1", tender_path=str(tpl), template_docx_path=str(tpl))
+    )["template_parts"]
+    man = st.read_parts_yaml(d)
+    keys = [e["key"] for e in man["entries"]]
+    assert "commercial_2" in keys                        # (四) 为 commercial 第二区间
+
+    # 附加段独立填充产物(带标记),主 forms 用真实填充
+    def _product(path: Path, marker: str):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        dd = Document(); dd.add_paragraph(marker); dd.save(path); return str(path)
+
+    body = d / "05_body"; body.mkdir(parents=True)
+    (body / "body.md").write_text("# 1 总体\n思路内容。", encoding="utf-8")
+    filled_forms = d / "06_fill" / "forms" / "forms.docx"
+    filled_forms.parent.mkdir(parents=True, exist_ok=True)
+    ff = Document(parts["forms"]); ff.add_paragraph("投标函已填"); ff.save(filled_forms)
+
+    state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
+                     template_docx_path=str(tpl), template_parts=parts,
+                     forms_docx_path=str(filled_forms),
+                     extra_products_commercial={
+                         "commercial_2": _product(d / "06_fill" / "commercial_2" /
+                                                  "commercial.docx", "身份证明已填")})
+    updates = asm.assemble_node(state)
+    joined = "\n".join(p.text for p in Document(updates["draft_docx_path"]).paragraphs
+                       if p.text.strip())
+    i_chapter = joined.index("第七章")
+    i_letter = joined.index("投标函已填")
+    i_mid = joined.index("身份证明已填")
+    i_qual = joined.index("资格证明文件 模板正文。")
+    assert i_chapter < i_letter < i_mid < i_qual          # 顺序还原,不再整桶前置

@@ -1,17 +1,10 @@
 """节点 7：投标函+报价文件+货物一览表+资格证明文件（非 harness）。
 
 LLM 直出填写 plan（FillOp 列表），python 经 fill_skill.run_fill_plan 单次执行；
-执行报错即失败(管线层软失败放行,不回炉——回炉曾致慢与逐轮丢 op)。
-确定值（项目名称等）仍由代码预填。
-skip gate 与 forms_docx_path 契约不变。
-"""
-"""节点 7：投标函+报价文件+货物一览表+资格证明文件（非 harness）。
-
-LLM 直出填写 plan（FillOp 列表），python 经 fill_skill.run_fill_plan 单次执行；
-个别 op 报错不弃产物(用户裁决 2026-08-27:记 error.log 供人工补);
-节点级异常(LLM 挂/校验失败)由管线层软失败放行。
-确定值（项目名称等）仍由代码预填。
-skip gate 与 forms_docx_path 契约不变。
+个别 op 报错不弃产物(用户裁决 2026-08-27:记 error.log 供人工补,产物保留)；
+节点级异常(LLM 挂/校验失败)由管线层软失败放行。同桶多区间附加段经
+merge_extra_entry_fills 各跑独立工作区(fill_ws_key 隔离,互不覆盖)。
+确定值（项目名称等）仍由代码预填。skip gate 与 forms_docx_path 契约不变。
 """
 import logging
 import shutil
@@ -22,8 +15,8 @@ from docx import Document
 
 from ..business import ensure_business_fields
 from ..fill_context import (
-    FIELD_SYNONYMS, PREFILL_NOTE, VALUE_PRIORITY, build_fill_context, prefill_known,
-    prefill_summary, resolve_template_src,
+    FIELD_SYNONYMS, PREFILL_NOTE, VALUE_PRIORITY, build_fill_context,
+    merge_extra_entry_fills, prefill_known, prefill_summary, resolve_template_src,
 )
 from ..fill_skill import run_fill_plan
 from ..models import make_agent, run_sync       # noqa: F401  (测试 monkeypatch ff.make_agent)
@@ -70,7 +63,7 @@ def _ops_of(ops) -> list[dict]:
     return [op.model_dump(exclude_none=True) for op in ops]
 
 
-def fill_forms_node(state: BidState) -> dict:
+def _forms_core(state: BidState) -> dict:
     facts = ensure_business_fields(state)       # 企业/法人/信用代码缺失则 mock 并回写 facts.yaml
     tpl_src = resolve_template_src(state, "forms")
     if not tpl_src:
@@ -78,7 +71,7 @@ def fill_forms_node(state: BidState) -> dict:
         return {"forms_docx_path": ""}
 
     run = run_dir(state)
-    ws = run / "06_fill" / "forms"
+    ws = run / "06_fill" / (state.fill_ws_key or "forms")
     ws.mkdir(parents=True, exist_ok=True)
     out = ws / "forms.docx"
     base = ws / "标书模板_预填.docx"           # 预填后的干净底稿:修复轮重放前重置用
@@ -145,3 +138,11 @@ def fill_forms_node(state: BidState) -> dict:
         log.warning("[forms] %d 条 op 报错已记 %s,产物保留", len(errors), errfile)
     log.info("[forms] 产物 %s(%d 字节)", out, out.stat().st_size)
     return {"forms_docx_path": str(out)}
+
+def fill_forms_node(state: BidState) -> dict:
+    updates = _forms_core(state)
+    if updates.get("forms_docx_path"):
+        extras = merge_extra_entry_fills(state, "forms", _forms_core, "forms_docx_path")
+        if extras:
+            updates["extra_products_forms"] = extras
+    return updates

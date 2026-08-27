@@ -84,33 +84,52 @@ def _append_docx_dedup(dest: Document, src: Document, existing: set,
 
 
 def _assemble_from_parts(state: BidState, manifest: dict, dest: Path, body_md: str) -> None:
-    """主路径：整模板样式壳清空 body，按文档原序拼接四桶 part。"""
+    """主路径：整模板样式壳清空 body，按 entries(run 粒度,文档原序)拼接。
+
+    同桶多区间(sources 如 (四)(五) 商务段嵌在投标函与资格之间)以 run 为单位
+    取材:优先该 run 的附加填充产物,其次桶级主产物(仅首 run),否则原始 part——
+    整桶单排序键曾致大纲乱序。
+    """
+    from .split_template import load_entries
+
     tpl = Path(state.template_docx_path)
     doc = copy_docx(tpl, dest)
     for el in list(doc.element.body.iterchildren()):
         if el.tag != qn("w:sectPr"):
             el.getparent().remove(el)
 
-    filled = {"forms": state.forms_docx_path, "deviation": state.deviation_docx_path,
-              "commercial": state.commercial_docx_path}
+    extra_all = {**state.extra_products_deviation, **state.extra_products_commercial,
+                 **state.extra_products_forms}
+    img_cache: dict = {}                              # 包级图片去重:各条目共享
     body_injected = False
-    img_cache: dict = {}                              # 包级图片去重:各桶共享
-    for bucket in manifest.get("order", []):
-        info = manifest.get("parts", {}).get(bucket) or {}
+    for entry in load_entries(manifest):
+        bucket = entry["bucket"]
+        key = entry["key"]
         if bucket == "technical":
-            container = info.get("path", "")
+            container = entry["path"]
             if not (container and Path(container).exists()):
                 continue
             part = Document(str(container))            # 技术部分以原始 part 为容器
-            tech = _find_range(docx_block_ranges(part), _TECH_KEYWORDS)
-            if tech is not None:
-                replace_elements(tech.elements[1:], _content_elements(body_md))
+            if body_injected:                          # 多个 technical run:后续原样保留
+                src = part
             else:
-                markdown_to_docx(part, body_md)
-            body_injected = True
-            src = part
+                tech = _find_range(docx_block_ranges(part), _TECH_KEYWORDS)
+                if tech is not None:
+                    replace_elements(tech.elements[1:], _content_elements(body_md))
+                else:
+                    markdown_to_docx(part, body_md)
+                body_injected = True
+                src = part
         else:
-            src_path = filled.get(bucket) or info.get("path") or ""
+            src_path = None
+            if key in extra_all and Path(extra_all[key]).exists():
+                src_path = extra_all[key]              # 该 run 的独立填充产物
+            elif key == bucket:
+                legacy = getattr(state, f"{bucket}_docx_path", "")
+                if legacy and Path(legacy).exists():
+                    src_path = legacy                  # 桶级主产物只挂首 run,防重复
+            if not (src_path and Path(src_path).exists()):
+                src_path = entry["path"]               # 回退原始 part(未填/跳过桶)
             if not (src_path and Path(src_path).exists()):
                 continue
             src = Document(str(src_path))
