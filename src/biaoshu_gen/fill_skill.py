@@ -10,6 +10,7 @@
 """
 import copy as _copy
 import os
+import re
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -18,19 +19,56 @@ from docx.text.paragraph import Paragraph
 
 UNDERLINE_CHARS = set("＿＿___―—-") - set("")  # 全角/半角下划线
 
-# 全半角标点归一化表(一一对应单字符,归一化串下标与原文一致):LLM 回显宽度常漂移
+# 全半角标点归一化表(一一对应单字符,归一化串下标与原文一致):LLM 回显宽度常漂移。
+# 注意:这是"下标保持型"归一化;另有一套"仅判断包含"的空白折叠 _norm_ws,两者各司其职。
 _WIDTH_NORM = str.maketrans({"（": "(", "）": ")", "：": ":", "，": ",", "；": ";"})
 
 # 标签之后的合法边界：分隔符/括号/空白/段末/下划线字符（防 "投标人" 误中 "投标人地址"）
 _BOUNDARY_CHARS = set("：:（）() \t，、；") | UNDERLINE_CHARS
+# 标签后的跳过集 = 边界集中的非下划线成员(_fill_blank_after 的游走用;单一来源防漂移)
+_SKIP_CHARS = "".join(sorted(_BOUNDARY_CHARS - UNDERLINE_CHARS))
+_KEEP_TAIL = "＿＿"                              # 值落在下划线段上后保留的余线
+
+
+def _slot_kind(run) -> str | None:
+    """run 属于哪种下划线填空位:「space」=带下划线的纯空白 run、「line」=纯下划线
+    字符段、None=普通文本。空位语义的唯一定义点(预填/blank/label/before-label 共用)。"""
+    t = run.text or ""
+    if not t:
+        return None
+    if not t.strip():
+        return "space" if _is_underlined(run) else None
+    return "line" if set(t.strip()) <= UNDERLINE_CHARS else None
+
+
+def _para_spans(p) -> list[tuple[int, int, object]]:
+    """段落 run -> 字符区间 [(start,end,run)](_fill_blank_after 与 replace_in_para 共用)。"""
+    spans = []
+    start = 0
+    for r in p.runs:
+        t = r.text or ""
+        spans.append((start, start + len(t), r))
+        start += len(t)
+    return spans
+
+
+def _norm_ws(s: str) -> str:
+    """空白归一化(\xa0→空格并折叠连续空白);仅供'是否包含'类匹配,不保下标。"""
+    return " ".join(s.replace("\xa0", " ").split())
+
+
+def _find_all(s: str, sub: str) -> list[tuple[int, int]]:
+    out = []
+    i = s.find(sub)
+    while i >= 0:
+        out.append((i, i + len(sub)))
+        i = s.find(sub, i + len(sub))
+    return out
 
 
 def _has_fill_slot(p: Paragraph) -> bool:
     """段落是否真实存在下划线填空位（下划线空白 run 或下划线字符 run）；无则跳过不硬插。"""
-    if any(r.text and not r.text.strip() and _is_underlined(r) for r in p.runs):
-        return True
-    return any((r.text or "").strip() and set((r.text or "").strip()) <= UNDERLINE_CHARS
-               for r in p.runs)
+    return any(_slot_kind(r) is not None for r in p.runs)
 
 
 def _is_underlined(run) -> bool:
@@ -62,7 +100,7 @@ def _fill_blank_in_para(p: Paragraph, value: str) -> None:
     for r in p.runs:                            # 下划线字符 run（＿＿＿/___）
         t = (r.text or "").strip()
         if t and set(t) <= UNDERLINE_CHARS:
-            r.text = f"{value}{'＿' * 2}"       # 值落在线上并保留余线
+            r.text = f"{value}{_KEEP_TAIL}"     # 值落在线上并保留余线
             return
     # 无空白也无下划线字符：复制末 run 格式插入带下划线的值 run（位置在段内，非段后附加）
     new_r = p.add_run(f" {value} ")
@@ -93,24 +131,22 @@ def fill_label_blank(doc, label: str, value: str) -> int:
     n = 0
     label_n = label.translate(_WIDTH_NORM)      # 模型回显宽度漂移:全半角归一化后匹配
     for p in doc.paragraphs:
-        text = p.text
-        text_n = text.translate(_WIDTH_NORM)    # 1:1 映射,归一化下标=原文下标
+        text_n = p.text.translate(_WIDTH_NORM)  # 1:1 映射,归一化下标=原文下标
         pos = 0
         while True:
             idx = text_n.find(label_n, pos)
             if idx < 0:
                 break
-            pos = idx + len(label)
+            end = idx + len(label)
+            pos = end                          # 先推进再校验:护栏失败也不至于原地重find
             if idx > 0 and text_n[idx - 1] not in _BOUNDARY_CHARS:
                 continue                       # 边界不符（如「分包号」误中「包号」）
-            end = idx + len(label)
             if end < len(text_n) and text_n[end] not in _BOUNDARY_CHARS:
                 continue                       # 段首匹配也须验证后边界（「投标人地址」≠「投标人」）
-            if _fill_blank_after(p, idx + len(label), value):
+            if _fill_blank_after(p, end, value):
                 n += 1
-                text = p.text                  # 段文本已变,重找后续标签
-                text_n = text.translate(_WIDTH_NORM)
-                pos = idx + len(label) + len(value)
+                text_n = p.text.translate(_WIDTH_NORM)   # 段文本已变,重找后续标签
+                pos = end + len(value)
     return n
 
 
@@ -122,14 +158,8 @@ def _fill_blank_after(p: Paragraph, q: int, value: str) -> bool:
     - 下划线字符段后同一 run 还有文字（「小写：___ 大写：___」整行一个 run）——
       按正则切出纯下划线 span 填入，不要求延伸到 run 尾。
     """
-    # run -> 字符区间映射
-    spans = []
-    start = 0
-    for r in p.runs:
-        t = r.text or ""
-        spans.append((start, start + len(t), r))
-        start += len(t)
-    total = start
+    spans = _para_spans(p)
+    total = spans[-1][1] if spans else 0
 
     def _run_at(pos: int):
         for s, e, r in spans:
@@ -138,26 +168,23 @@ def _fill_blank_after(p: Paragraph, q: int, value: str) -> bool:
         return None
 
     # 跳过标签后的边界符(LLM 常丢冒号:「采购代理编号」对「采购代理编号：__」);
-    # 但带下划线的纯空白 run 是填空位本身,不可跳过——直接落值。
-    while q < total and p.text[q] in " \t：:（）()":
+    # 但空位本身就是下划线空白 run("space"),不可跳过——直接落值。
+    while q < total and p.text[q] in _SKIP_CHARS:
         hit = _run_at(q)
-        if hit is not None:
-            _, _, r = hit
-            if _is_underlined(r) and not (r.text or "").strip():
-                r.text = value                   # 与 _fill_blank_in_para 一致:值即整线
-                return True
+        if hit is not None and _slot_kind(hit[2]) == "space":
+            hit[2].text = value                 # 与 _fill_blank_in_para 一致:值即整线
+            return True
         q += 1
 
     hit = _run_at(q)
     if hit is None:
         return False
-    s, e, r = hit
+    s, _, r = hit
     t = r.text or ""
     off = q - s
-    import re as _re
-    m = _re.match("[_＿]+", t[off:])           # 段中/至 run 尾的下划线段均可
+    m = re.match("[_＿]+", t[off:])             # 段中/至 run 尾的下划线段均可
     if m:
-        r.text = t[:off] + value + "＿＿" + t[off + m.end():]
+        r.text = t[:off] + value + _KEEP_TAIL + t[off + m.end():]
         return True
     if not t and _is_underlined(r) and q == s:  # 空 run 空位
         r.text = value
@@ -173,23 +200,17 @@ def fill_blank_before_label(doc, label: str, value: str) -> int:
     多标签并列（如「（项目名称、政府采购编号、采购代理编号）」）归属不明，不填；
     括号内容须与 label 全等，防「（采购人单位名称）」误中「（单位名称）」。
     """
-    import re as _re
-
+    keep_by_kind = {"space": "", "line": _KEEP_TAIL}
     n = 0
     for p in doc.paragraphs:
         runs = p.runs
         for i in range(len(runs) - 1):
-            r = runs[i]
-            t = r.text or ""
-            if not t.strip() and t and _is_underlined(r):        # 下划线空白 run
-                keep = ""
-            elif t.strip() and set(t.strip()) <= UNDERLINE_CHARS:  # 下划线字符段
-                keep = "＿＿"
-            else:
-                continue
-            m = _re.match(r"\s*[（(]([^（）()]+)[）)]", runs[i + 1].text or "")
+            kind = _slot_kind(runs[i])
+            if kind is None:
+                continue                        # 非空位 run 不动
+            m = re.match(r"\s*[（(]([^（）()]+)[）)]", runs[i + 1].text or "")
             if m and m.group(1).strip() == label:
-                r.text = value + keep
+                runs[i].text = value + keep_by_kind[kind]
                 n += 1
     return n
 
@@ -221,41 +242,26 @@ def replace_in_para(doc, prefix: str, old: str, new: str) -> Paragraph:
 
     old 字面找不到时按全半角标点归一化重试（LLM 常把模板半角括号写成全角；
     映射为一一对应单字符,归一化串下标可直接映射回原文）。全部命中从右往左
-    依次改写,避免下标位移。
+    依次改写,避免下标位移;spans 只需构建一次——右侧改写不影响左侧命中的区间。
     """
     p = find_para(doc, prefix)
     full = "".join(r.text for r in p.runs)
-    matches: list[tuple[int, int]] = []
-    start_at = full.find(old)
-    while start_at >= 0:                                   # 字面命中(全部出现处)
-        matches.append((start_at, start_at + len(old)))
-        start_at = full.find(old, start_at + len(old))
-    if not matches:
-        nfull = full.translate(_WIDTH_NORM)
-        nold = old.translate(_WIDTH_NORM)
-        start_at = nfull.find(nold)
-        while start_at >= 0:                               # 归一化命中
-            matches.append((start_at, start_at + len(nold)))
-            start_at = nfull.find(nold, start_at + len(nold))
+    matches = _find_all(full, old) \
+        or _find_all(full.translate(_WIDTH_NORM), old.translate(_WIDTH_NORM))
     if not matches:
         raise RuntimeError(f"{prefix!r} 段落中未找到 {old!r}：{full[:60]!r}")
 
+    spans = _para_spans(p)
     for pos, end in reversed(matches):
-        spans = []
-        s0 = 0
-        for r in p.runs:
-            t = r.text or ""
-            spans.append((s0, s0 + len(t), r))
-            s0 += len(t)
-        hit = [(i, s, e, r) for i, (s, e, r) in enumerate(spans) if s < end and e > pos
+        hit = [(s, e, r) for s, e, r in spans if s < end and e > pos
                or (s == e and pos <= s < end)]             # 空 run 视为在 pos 处
         if not hit:
             continue
-        i0, s0_, _, r_first = hit[0]
-        _, s1, _, r_last = hit[-1]
-        r_first.text = (r_first.text or "")[:pos - s0_] + new \
-            + (r_last.text or "") [end - s1:]
-        for _, _, _, r in hit[1:]:
+        s_first, _, r_first = hit[0]
+        s_last, _, r_last = hit[-1]
+        r_first.text = (r_first.text or "")[:pos - s_first] + new \
+            + (r_last.text or "")[end - s_last:]
+        for _, _, r in hit[1:]:
             r.text = ""
     return p
 
@@ -318,20 +324,22 @@ def insert_picture_after(doc, prefix: str, img: str, width_inch: float = 5.6,
 
 # ---------------- 声明式填空清单（一次执行、批量报错，压缩 harness 轮次） ----------------
 
-def _match_key(k: str, head: str) -> bool:
-    """表头关键词匹配:空白/不间断空格归一化;模型常把表标题拼进关键词
-    (「货物说明一览表：序号」),直接未中时剥掉冒号前缀再试。"""
-    norm = lambda s: " ".join(s.replace("\xa0", " ").split())
-    if norm(k) in norm(head):
-        return True
-    return "：" in k and norm(k.split("：")[-1]) in norm(head)
+def _match_key(nk: str, alt: str | None, nhead: str) -> bool:
+    """归一化后的关键词命中判断;alt 为剥掉冒号前缀的备选(「货物说明一览表：序号」→「序号」)。"""
+    return nk in nhead or (alt is not None and alt in nhead)
 
 
 def find_table(doc, *header_keywords: str) -> int:
-    """按表头关键词定位表格（表头行含全部关键词），返回下标；找不到抛 RuntimeError。"""
+    """按表头关键词定位表格（表头行含全部关键词），返回下标；找不到抛 RuntimeError。
+
+    关键词与表头按 _norm_ws 归一化(模型常把'备\\xa0\\xa0注'回显成普通空格),
+    关键词只归一化一次,不随候选表重复计算。
+    """
+    keys = [(_norm_ws(k), _norm_ws(k.rsplit("：", 1)[-1]) if "：" in k else None)
+            for k in header_keywords]
     for i, t in enumerate(doc.tables):
-        head = " ".join(c.text for c in t.rows[0].cells)
-        if all(_match_key(k, head) for k in header_keywords):
+        nhead = _norm_ws(" ".join(c.text for c in t.rows[0].cells))
+        if all(_match_key(nk, alt, nhead) for nk, alt in keys):
             return i
     raise RuntimeError(f"找不到表头含 {header_keywords} 的表格")
 
@@ -343,10 +351,7 @@ def dump_fill_points(doc) -> str:
         t = p.text.strip()
         if not t:
             continue
-        has_blank = any(r.text and not r.text.strip() and _is_underlined(r) for r in p.runs) \
-            or any((r.text or "").strip() and set((r.text or "").strip()) <= UNDERLINE_CHARS
-                   for r in p.runs)
-        lines.append(f"[{i}]{'(线)' if has_blank else ''} {t[:50]}")
+        lines.append(f"[{i}]{'(线)' if _has_fill_slot(p) else ''} {t[:50]}")
     lines.append("== 表格 ==")
     for i, t in enumerate(doc.tables):
         # 表头单元格不截断:模型须逐字回显完整表头作 table_header 关键词

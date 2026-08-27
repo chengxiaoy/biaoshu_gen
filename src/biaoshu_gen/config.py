@@ -76,3 +76,8 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def runs_root() -> Path:
+    """全部 run 目录的根——runs 布局的唯一定义点(cli/models/state 共用)。"""
+    return get_settings().data_dir / "runs"

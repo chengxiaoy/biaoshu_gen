@@ -52,3 +52,12 @@ class BidState(BaseModel):
 
 def run_dir(state: BidState) -> Path:
     return get_settings().data_dir / "runs" / state.run_id
+
+
+def write_node_error(state: BidState, name: str, text: str) -> Path:
+    """节点错误落盘 06_fill/<name>.error.log(软失败/部分保留共用的统一出口)。"""
+    d = run_dir(state) / "06_fill"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{name}.error.log"
+    p.write_text(text, encoding="utf-8")
+    return p

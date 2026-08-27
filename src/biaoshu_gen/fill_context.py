@@ -49,11 +49,17 @@ def load_facts(state: BidState) -> GlobalFacts:
     return state.facts or GlobalFacts()
 
 
-def prefill_known(doc: Document, state: BidState) -> list[str]:
+def prefill_summary(prefilled: dict[str, int]) -> list[str]:
+    """预填结果 -> prompt 摘要行(["项目名称×3",…]),展示格式集中一处。"""
+    return [f"{field}×{n}" for field, n in prefilled.items()]
+
+
+def prefill_known(doc: Document, state: BidState) -> dict[str, int]:
     """在已打开的模板文档上预填确定值（项目/编号/备案号/投标人/法人/信用代码）。
 
     值侧来自 facts（template_fields + 企业资料）与 metadata，标签侧走 FIELD_SYNONYMS
-    逐字段扫描；返回已填字段摘要（如 "项目名称×3"），供 prompt 告知 harness 勿重复填写。
+    三种文体各扫一遍；返回 {字段: 填写处数}(调用方经 prefill_summary 转展示串,
+    fill_forms 按键名直接判断覆盖,不解析展示串)。
     """
     facts = load_facts(state)
     tf = facts.template_fields
@@ -67,7 +73,7 @@ def prefill_known(doc: Document, state: BidState) -> list[str]:
         "法定代表人": facts.legal_person,
         "统一社会信用代码": facts.credit_code,
     }
-    summary: list[str] = []
+    filled: dict[str, int] = {}
     for field, synonyms in FIELD_SYNONYMS.items():
         value = values[field]
         if not value:
@@ -79,8 +85,8 @@ def prefill_known(doc: Document, state: BidState) -> list[str]:
                 n = fill_all_blanks(doc, syn, value)  # 回退段首语义(含「投标人（签章）：」形态)
             total += n + fill_blank_before_label(doc, syn, value)  # __(标签) 文体
         if total:
-            summary.append(f"{field}×{total}")
-    return summary
+            filled[field] = total
+    return filled
 
 
 def build_fill_context(state: BidState, tpl_doc: Document | None = None) -> str:
@@ -150,6 +156,6 @@ def run_fill_node(state: BidState, *, subdir: str, output_field: str, output_nam
               + "\n\n" + build_fill_context(state, tpl_doc=doc)
               + "\n\n" + VALUE_PRIORITY)
     if prefilled:
-        prompt += "\n\n" + PREFILL_NOTE + "\n- ".join(prefilled)
+        prompt += "\n\n" + PREFILL_NOTE + "\n- ".join(prefill_summary(prefilled))
     run_harness_task(HarnessTask(prompt=prompt, cwd=ws, expected_outputs=[out]))
     return {output_field: str(out)}

@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from .config import get_settings
+from .config import runs_root
 from .graph import STAGES, STAGE_ORDER, build_graph
 
 app = typer.Typer(help="软件标书智能体 POC", no_args_is_help=True)
@@ -17,10 +17,6 @@ INIT_FIELDS = ("run_id", "tender_path", "kb_dir", "template_docx_path")
 
 _STAGE_INDEX = {s: i for i, s in enumerate(STAGE_ORDER)}
 _NODE_STAGE = {n: i for i, s in enumerate(STAGE_ORDER) for n in STAGES[s].members}
-
-
-def runs_root() -> Path:
-    return get_settings().data_dir / "runs"
 
 
 def _resolve_run_id(run_id: str | None) -> str:

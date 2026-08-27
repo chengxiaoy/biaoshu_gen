@@ -59,12 +59,16 @@ def _collect_keys(doc: Document) -> set:
     return {key for block in iter_block_items(doc) if (key := _block_key(block))}
 
 
-def _append_docx_dedup(dest: Document, src: Document, existing: set) -> None:
-    """兜底：整本去重追加（src 中与底稿文本相同的块跳过）。"""
+def _append_docx_dedup(dest: Document, src: Document, existing: set,
+                       img_cache: dict | None = None) -> None:
+    """兜底：整本去重追加（src 中与底稿文本相同的块跳过）。
+
+    逐块先筛选再搬运,无法走内建迁移的 mover,此处手工配对 adopt(注释即契约)。"""
     import copy as _copy
 
+    if img_cache is None:
+        img_cache = {}
     sect_pr = dest.element.body.sectPr
-    img_cache: dict = {}
     for block in iter_block_items(src):
         key = _block_key(block)
         if not key or key in existing:
@@ -90,6 +94,7 @@ def _assemble_from_parts(state: BidState, manifest: dict, dest: Path, body_md: s
     filled = {"forms": state.forms_docx_path, "deviation": state.deviation_docx_path,
               "commercial": state.commercial_docx_path}
     body_injected = False
+    img_cache: dict = {}                              # 包级图片去重:各桶共享
     for bucket in manifest.get("order", []):
         info = manifest.get("parts", {}).get(bucket) or {}
         if bucket == "technical":
@@ -111,8 +116,7 @@ def _assemble_from_parts(state: BidState, manifest: dict, dest: Path, body_md: s
             src = Document(str(src_path))
         elements = [el for el in src.element.body.iterchildren()
                     if el.tag != qn("w:sectPr")]
-        adopt_image_rels(doc, src, elements)          # 迁移插图关系到壳包
-        append_elements_before_sectpr(doc, elements)
+        append_elements_before_sectpr(doc, elements, src_doc=src, img_cache=img_cache)
     if not body_injected and body_md:                  # 无技术桶时 body 兜底尾部追加
         doc.add_page_break()
         markdown_to_docx(doc, "# 技术方案\n\n" + body_md)
@@ -153,6 +157,7 @@ def assemble_node(state: BidState) -> dict:
     # 商务部分 / 偏离表 -> 同锚区间整段替换；底稿无该区间则仅追加该区间；再兜底整本去重
     from ..fill_context import SECTION_KEYWORDS
 
+    img_cache: dict = {}
     for field, key in (("commercial_docx_path", "commercial"), ("deviation_docx_path", "deviation")):
         path = getattr(state, field)
         if not (path and Path(path).exists()):
@@ -162,14 +167,15 @@ def assemble_node(state: BidState) -> dict:
         src_range = _find_range(docx_block_ranges(src), keywords)
         base_range = _find_range(docx_block_ranges(doc), keywords)
         if src_range is not None and base_range is not None:
-            adopt_image_rels(doc, src, src_range.elements)   # 迁移插图关系
-            replace_elements(base_range.elements, src_range.elements)
+            replace_elements(base_range.elements, src_range.elements,
+                             dest_doc=doc, src_doc=src, img_cache=img_cache)
         elif src_range is not None:
             doc.add_page_break()
-            append_elements_before_sectpr(doc, src_range.elements)
+            append_elements_before_sectpr(doc, src_range.elements,
+                                          src_doc=src, img_cache=img_cache)
         else:
             doc.add_page_break()
-            _append_docx_dedup(doc, src, _collect_keys(doc))
+            _append_docx_dedup(doc, src, _collect_keys(doc), img_cache)
     doc.save(str(dest))
     return _finish(state, dest, out_dir, version, body_md)
 

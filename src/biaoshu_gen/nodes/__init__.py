@@ -55,19 +55,19 @@ def soft_fill_fail(name: str, field_default: dict):
     用户裁决:fill 节点失败不阻塞管线(不重跑、不中断),失败信息记 log,
     assemble 对缺失产物天然容错(用原始 part)。
     """
+    import logging
     import traceback
+
+    from ..state import write_node_error
+
+    log = logging.getLogger(__name__)
 
     def wrap(fn: NodeFn) -> NodeFn:
         def node(state: BidState) -> dict:
-            import logging
-            from ..state import run_dir
-            log = logging.getLogger(__name__)
             try:
                 return fn(state)
             except Exception:
-                errfile = run_dir(state) / "06_fill" / f"{name}.error.log"
-                errfile.parent.mkdir(parents=True, exist_ok=True)
-                errfile.write_text(traceback.format_exc(), encoding="utf-8")
+                errfile = write_node_error(state, name, traceback.format_exc())
                 log.exception("%s 节点失败,已记 %s,流程继续(产物置空)", name, errfile)
                 return dict(field_default)
         node.__name__ = fn.__name__

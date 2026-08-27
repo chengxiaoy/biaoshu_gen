@@ -4,8 +4,9 @@ from pathlib import Path
 from docx import Document
 
 from biaoshu_gen.fill_skill import (
-    dump_fill_points, fill_all_blanks, fill_blank, fill_cell, find_para,
-    find_table, insert_picture_after, replace_in_para, run_fill_plan,
+    dump_fill_points, fill_all_blanks, fill_blank, fill_blank_before_label,
+    fill_cell, find_para, find_table, insert_picture_after, replace_in_para,
+    run_fill_plan,
 )
 
 # 1x1 透明 PNG（构造插图用，无需 PIL）
@@ -149,7 +150,6 @@ def test_fill_blank_before_label_paren_annotation(tmp_path: Path):
     src = tmp_path / "t.docx"
     d.save(src)
 
-    from biaoshu_gen.fill_skill import fill_blank_before_label
     d2 = Document(str(src))
     assert fill_blank_before_label(d2, "项目名称", "实训室项目") == 1
     texts = [x.text for x in d2.paragraphs]
@@ -189,7 +189,7 @@ def test_fill_blank_before_label_in_prefill_known(tmp_path: Path, monkeypatch):
     texts = [x.text for x in doc.paragraphs]
     assert "本公司参加某某科技有限公司（待替换）（单位名称）承建" == texts[0]
     assert "我系参加演示项目（项目名称）磋商" == texts[1]
-    assert "投标人×1" in summary and "项目名称×1" in summary
+    assert summary["投标人"] == 1 and summary["项目名称"] == 1
 
 
 def test_dump_fill_points_shows_full_header_text(tmp_path: Path):

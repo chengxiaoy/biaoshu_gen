@@ -259,7 +259,7 @@ def test_prefill_known_fills_deterministic_values(tmp_path: Path, monkeypatch):
     assert "采购人名称：某某局" in texts
     assert any(t.startswith("投标人（签章）：某某科技") for t in texts)   # mock 企业名已预填
     assert any(t.startswith("法定代表人：法定代表人") for t in texts)
-    assert "项目名称×1" in summary and "投标人×1" in summary
+    assert summary["项目名称"] == 1 and summary["投标人"] == 1
 
 
 def test_fill_forms_uses_part_when_present(tmp_path: Path, monkeypatch):

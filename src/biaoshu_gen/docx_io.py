@@ -163,12 +163,21 @@ def docx_block_ranges(doc: DocumentType) -> list[DocxBlockRange]:
     return ranges
 
 
-def replace_elements(old_elements: list, new_elements: list) -> None:
-    """就地替换：new_elements（来自其他文档，自动深拷贝）替换 old_elements，保持原位置。"""
+def replace_elements(old_elements: list, new_elements: list, *,
+                     dest_doc: DocumentType | None = None,
+                     src_doc: DocumentType | None = None,
+                     img_cache: dict | None = None) -> None:
+    """就地替换：new_elements（来自其他文档，自动深拷贝）替换 old_elements，保持原位置。
+
+    传 dest_doc+src_doc 时先为新元素迁移图片关系——跨文档搬运的内建步骤，
+    调用方无需（也不应）单独手工调用 adopt_image_rels。
+    """
     import copy as _copy
 
     if not old_elements:
         return
+    if dest_doc is not None and src_doc is not None:
+        adopt_image_rels(dest_doc, src_doc, new_elements, img_cache)
     anchor = old_elements[0]
     for el in new_elements:
         anchor.addprevious(_copy.deepcopy(el))
@@ -176,10 +185,17 @@ def replace_elements(old_elements: list, new_elements: list) -> None:
         el.getparent().remove(el)
 
 
-def append_elements_before_sectpr(doc: DocumentType, elements: list) -> None:
-    """把 elements（外部文档元素，深拷贝）追加到 body 末尾（sectPr 之前）。"""
+def append_elements_before_sectpr(doc: DocumentType, elements: list, *,
+                                  src_doc: DocumentType | None = None,
+                                  img_cache: dict | None = None) -> None:
+    """把 elements（外部文档元素，深拷贝）追加到 body 末尾（sectPr 之前）。
+
+    传 src_doc 时先迁移图片关系(同 replace_elements)。
+    """
     import copy as _copy
 
+    if src_doc is not None:
+        adopt_image_rels(doc, src_doc, elements, img_cache)
     sect_pr = doc.element.body.sectPr
     for el in elements:
         if sect_pr is not None:
