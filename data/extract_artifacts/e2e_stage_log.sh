@@ -41,11 +41,15 @@ run_timed() {
 }
 
 for stage in "$@"; do
-  if [ "$stage" = fill ]; then
-    rm -rf "$RUN/06_fill"                      # 清空旧产物:防 harness 产出校验吃到陈旧文件
-    run_timed fill "rerun fill"
+  case "$stage" in
+    fill)      rm -rf "$RUN/06_fill";;
+    assemble)  rm -rf "$RUN/07_draft";;
+    review|revise) rm -rf "$RUN/08_review";;
+  esac
+  if [ "$stage" = parse ]; then
+    run_timed parse "parse"                    # parse 无前序备份,只能正向执行
   else
-    run_timed "$stage" "$stage"
+    run_timed "$stage" "rerun $stage"          # 已完成阶段正向执行是无操作,必须 rerun
   fi
 done
 

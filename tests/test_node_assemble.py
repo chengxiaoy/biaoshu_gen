@@ -194,3 +194,59 @@ def test_assemble_concatenates_parts_in_template_order(tmp_path: Path, monkeypat
     assert "三、保证金 模板正文。" in joined                        # 跳过桶保留模板原文
     assert "六、项目实施方案 模板正文。" not in joined               # 技术区间被 body 替换
     assert "总体思路内容" in joined                                  # body 已注入
+
+
+def test_assemble_migrates_images_from_parts(tmp_path: Path, monkeypatch):
+    """跨文档搬运须迁移图片关系:commercial 产物里的插图装配后 rId 须在壳包可解析。
+
+    真实事故:装配只搬 body 元素,a:blip@r:embed 仍指源文档关系表——Word 打开
+    显示空白,而 inline_shapes 计数照常(只数 XML 不解析关系),具有欺骗性。
+    """
+    from io import BytesIO
+
+    from docx.oxml.ns import qn
+
+    from biaoshu_gen.nodes import split_template as st
+
+    _PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+            b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+
+    monkeypatch.chdir(tmp_path)
+    d = run_dir(BidState(run_id="run-1"))
+    ws = d / "02_template"
+    ws.mkdir(parents=True)
+    tpl = ws / "标书模板.docx"
+    doc = Document()
+    doc.add_paragraph("第五章 响应文件组成")               # 无标题前导段 -> commercial 桶
+    for title in ("一、磋商响应声明", "六、项目实施方案", "七、合同条款偏离表"):
+        doc.add_heading(title, level=2)
+        doc.add_paragraph(f"{title} 模板正文。")
+    doc.save(tpl)
+    parts = st.split_template_node(
+        BidState(run_id="run-1", tender_path=str(tpl), template_docx_path=str(tpl))
+    )["template_parts"]
+
+    com = Document(parts["commercial"])
+    com.add_paragraph("资质证明：")
+    com.add_paragraph().add_run().add_picture(BytesIO(_PNG))
+    com_out = d / "06_fill" / "commercial" / "commercial.docx"
+    com_out.parent.mkdir(parents=True, exist_ok=True)
+    com.save(com_out)
+
+    body = d / "05_body"
+    body.mkdir(parents=True)
+    (body / "body.md").write_text("# 1 总体思路\n\n内容。", encoding="utf-8")
+    state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
+                     template_docx_path=str(tpl), template_parts=parts,
+                     commercial_docx_path=str(com_out))
+
+    updates = asm.assemble_node(state)
+
+    draft = Document(updates["draft_docx_path"])
+    blips = list(draft.element.body.iter(qn("a:blip")))
+    assert len(blips) == 1
+    rid = blips[0].get(qn("r:embed"))
+    assert rid in draft.part.rels                                # rId 在壳包内注册
+    assert draft.part.rels[rid].target_part.blob == _PNG         # 指向同一图片字节
+    assert len(draft.inline_shapes) == 1

@@ -18,7 +18,7 @@ from docx import Document
 from docx.oxml.ns import qn
 
 from ..docx_io import (
-    append_elements_before_sectpr, copy_docx, docx_block_ranges,
+    adopt_image_rels, append_elements_before_sectpr, copy_docx, docx_block_ranges,
     iter_block_items, markdown_to_docx, replace_elements,
 )
 from ..state import BidState, run_dir
@@ -64,12 +64,15 @@ def _append_docx_dedup(dest: Document, src: Document, existing: set) -> None:
     import copy as _copy
 
     sect_pr = dest.element.body.sectPr
+    img_cache: dict = {}
     for block in iter_block_items(src):
         key = _block_key(block)
         if not key or key in existing:
             continue
         existing.add(key)
-        el = _copy.deepcopy(block._element)
+        el = block._element
+        adopt_image_rels(dest, src, [el], img_cache)   # 迁移插图关系后深拷贝
+        el = _copy.deepcopy(el)
         if sect_pr is not None:
             sect_pr.addprevious(el)
         else:
@@ -108,6 +111,7 @@ def _assemble_from_parts(state: BidState, manifest: dict, dest: Path, body_md: s
             src = Document(str(src_path))
         elements = [el for el in src.element.body.iterchildren()
                     if el.tag != qn("w:sectPr")]
+        adopt_image_rels(doc, src, elements)          # 迁移插图关系到壳包
         append_elements_before_sectpr(doc, elements)
     if not body_injected and body_md:                  # 无技术桶时 body 兜底尾部追加
         doc.add_page_break()
@@ -158,6 +162,7 @@ def assemble_node(state: BidState) -> dict:
         src_range = _find_range(docx_block_ranges(src), keywords)
         base_range = _find_range(docx_block_ranges(doc), keywords)
         if src_range is not None and base_range is not None:
+            adopt_image_rels(doc, src, src_range.elements)   # 迁移插图关系
             replace_elements(base_range.elements, src_range.elements)
         elif src_range is not None:
             doc.add_page_break()

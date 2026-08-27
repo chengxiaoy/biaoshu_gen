@@ -188,6 +188,42 @@ def append_elements_before_sectpr(doc: DocumentType, elements: list) -> None:
             doc.element.body.append(_copy.deepcopy(el))
 
 
+def adopt_image_rels(dest_doc: DocumentType, src_doc: DocumentType,
+                     elements: list, cache: dict | None = None) -> None:
+    """跨文档搬运前迁移图片关系：把 elements 引用 src_doc 包内图片的 rId
+    改写为 dest_doc 新注册的 rId（图片部件按 blob 注册，包级按 SHA1 去重）。
+
+    不迁移则 a:blip@r:embed / v:imagedata@r:id 仍指源文档关系表——Word 打开
+    显示空白，而 inline_shapes 计数照常（只数 XML 节点不解析关系）。
+    """
+    from io import BytesIO
+
+    if cache is None:
+        cache = {}
+    _vml_imagedata = "{urn:schemas-microsoft-com:vml}imagedata"   # nsmap 无 v 前缀
+    for el in elements:
+        for node in el.iter():
+            if node.tag == qn("a:blip"):
+                attr = qn("r:embed")
+            elif node.tag == _vml_imagedata:
+                attr = qn("r:id")
+            else:
+                continue
+            old = node.get(attr)
+            if not old:
+                continue
+            if old in cache:
+                node.set(attr, cache[old])
+                continue
+            try:
+                blob = src_doc.part.rels[old].target_part.blob
+            except KeyError:
+                continue                           # 源文档无此关系,保持原样
+            new_rid, _ = dest_doc.part.get_or_add_image(BytesIO(blob))
+            cache[old] = new_rid
+            node.set(attr, new_rid)
+
+
 def template_has_section(tpl_path: Path, keyword: str) -> bool:
     """动态判断响应模板中是否存在含 keyword 的段落。"""
     if not tpl_path.exists():
