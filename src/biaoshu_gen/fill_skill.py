@@ -19,7 +19,7 @@ from docx.text.paragraph import Paragraph
 UNDERLINE_CHARS = set("＿＿___―—-") - set("")  # 全角/半角下划线
 
 # 标签之后的合法边界：分隔符/括号/空白/段末/下划线字符（防 "投标人" 误中 "投标人地址"）
-_BOUNDARY_CHARS = set("：:（）() \t") | UNDERLINE_CHARS
+_BOUNDARY_CHARS = set("：:（）() \t，、；") | UNDERLINE_CHARS
 
 
 def _has_fill_slot(p: Paragraph) -> bool:
@@ -97,7 +97,10 @@ def fill_label_blank(doc, label: str, value: str) -> int:
                 break
             pos = idx + len(label)
             if idx > 0 and text[idx - 1] not in _BOUNDARY_CHARS:
-                continue                       # 边界不符（如「投标人地址」误中「投标人」）
+                continue                       # 边界不符（如「分包号」误中「包号」）
+            end = idx + len(label)
+            if end < len(text) and text[end] not in _BOUNDARY_CHARS:
+                continue                       # 段首匹配也须验证后边界（「投标人地址」≠「投标人」）
             if _fill_blank_after(p, idx + len(label), value):
                 n += 1
                 text = p.text                  # 段文本已变,重找后续标签
@@ -106,7 +109,13 @@ def fill_label_blank(doc, label: str, value: str) -> int:
 
 
 def _fill_blank_after(p: Paragraph, q: int, value: str) -> bool:
-    """在段落第 q 个字符处起填空：跳过边界符（冒号/括号/空白）后须是下划线段或下划线空白 run。"""
+    """在段落第 q 个字符处起填空：跳过边界符（冒号/括号/空白）后须是下划线段或下划线空白 run。
+
+    真实模板两种形态曾致漏填（run 游走须感知格式，不能纯按字符跳）：
+    - 填空位本身是带下划线格式的纯空格 run——跳过循环不得越过它，遇之就地填值；
+    - 下划线字符段后同一 run 还有文字（「小写：___ 大写：___」整行一个 run）——
+      按正则切出纯下划线 span 填入，不要求延伸到 run 尾。
+    """
     # run -> 字符区间映射
     spans = []
     start = 0
@@ -115,24 +124,38 @@ def _fill_blank_after(p: Paragraph, q: int, value: str) -> bool:
         spans.append((start, start + len(t), r))
         start += len(t)
     total = start
-    # 跳过标签后的边界符(LLM 常丢冒号:「采购代理编号」对「采购代理编号：__」)
+
+    def _run_at(pos: int):
+        for s, e, r in spans:
+            if s <= pos < e or (pos == s == e and not (r.text or "")):
+                return s, e, r
+        return None
+
+    # 跳过标签后的边界符(LLM 常丢冒号:「采购代理编号」对「采购代理编号：__」);
+    # 但带下划线的纯空白 run 是填空位本身,不可跳过——直接落值。
     while q < total and p.text[q] in " \t：:（）()":
+        hit = _run_at(q)
+        if hit is not None:
+            _, _, r = hit
+            if _is_underlined(r) and not (r.text or "").strip():
+                r.text = value                   # 与 _fill_blank_in_para 一致:值即整线
+                return True
         q += 1
-    for s, e, r in spans:
-        if s <= q < e or (q == s == e):        # 空 run 也可能是空位 run
-            off = q - s
-            t = r.text or ""
-            rest = t[off:]
-            if rest and set(rest) <= UNDERLINE_CHARS:          # 下划线字符段:值+余线
-                r.text = t[:off] + value + "＿＿" + t[off + len(rest):]
-                return True
-            if not rest.strip() and _is_underlined(r) and rest:  # 带下划线的空白 run
-                r.text = value + "  "
-                return True
-            if not t and _is_underlined(r) and q == s:          # 空 run 空位
-                r.text = value + "  "
-                return True
-            return False
+
+    hit = _run_at(q)
+    if hit is None:
+        return False
+    s, e, r = hit
+    t = r.text or ""
+    off = q - s
+    import re as _re
+    m = _re.match("[_＿]+", t[off:])           # 段中/至 run 尾的下划线段均可
+    if m:
+        r.text = t[:off] + value + "＿＿" + t[off + m.end():]
+        return True
+    if not t and _is_underlined(r) and q == s:  # 空 run 空位
+        r.text = value
+        return True
     return False
 
 
@@ -159,14 +182,47 @@ def fill_all_blanks(doc, prefix: str, value: str) -> int:
 
 
 def replace_in_para(doc, prefix: str, old: str, new: str) -> Paragraph:
-    """段内文本替换（保留首个 run 格式，整段合并）。"""
+    """段内文本替换：只重写命中区间的 run,同段其余 run（下划线填空位等）保持不动。
+
+    old 字面找不到时按全半角标点归一化重试（LLM 常把模板半角括号写成全角；
+    映射为一一对应单字符,归一化串下标可直接映射回原文）。全部命中从右往左
+    依次改写,避免下标位移。
+    """
     p = find_para(doc, prefix)
     full = "".join(r.text for r in p.runs)
-    if old not in full:
+    matches: list[tuple[int, int]] = []
+    start_at = full.find(old)
+    while start_at >= 0:                                   # 字面命中(全部出现处)
+        matches.append((start_at, start_at + len(old)))
+        start_at = full.find(old, start_at + len(old))
+    if not matches:
+        norm = str.maketrans({"（": "(", "）": ")", "：": ":", "，": ",", "；": ";"})
+        nfull = full.translate(norm)
+        nold = old.translate(norm)
+        start_at = nfull.find(nold)
+        while start_at >= 0:                               # 归一化命中
+            matches.append((start_at, start_at + len(nold)))
+            start_at = nfull.find(nold, start_at + len(nold))
+    if not matches:
         raise RuntimeError(f"{prefix!r} 段落中未找到 {old!r}：{full[:60]!r}")
-    p.runs[0].text = full.replace(old, new)
-    for r in p.runs[1:]:
-        r.text = ""
+
+    for pos, end in reversed(matches):
+        spans = []
+        s0 = 0
+        for r in p.runs:
+            t = r.text or ""
+            spans.append((s0, s0 + len(t), r))
+            s0 += len(t)
+        hit = [(i, s, e, r) for i, (s, e, r) in enumerate(spans) if s < end and e > pos
+               or (s == e and pos <= s < end)]             # 空 run 视为在 pos 处
+        if not hit:
+            continue
+        i0, s0_, _, r_first = hit[0]
+        _, s1, _, r_last = hit[-1]
+        r_first.text = (r_first.text or "")[:pos - s0_] + new \
+            + (r_last.text or "") [end - s1:]
+        for _, _, _, r in hit[1:]:
+            r.text = ""
     return p
 
 

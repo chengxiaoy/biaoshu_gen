@@ -8,7 +8,7 @@ from pathlib import Path
 from docx import Document
 
 from .docx_io import template_has_section
-from .fill_skill import dump_fill_points, fill_all_blanks
+from .fill_skill import dump_fill_points, fill_all_blanks, fill_label_blank
 from .harness import HarnessTask, prepare_agent_workspace, run_harness_task
 from .kb import KnowledgeBase
 from .schemas import GlobalFacts, from_yaml_file
@@ -25,7 +25,7 @@ SECTION_KEYWORDS: dict[str, tuple[str, ...]] = {
 # 匹配须到分隔符/括号/段末为止，故 "投标人" 命中 投标人：/投标人（签章）：，不命中 投标人地址：。
 FIELD_SYNONYMS: dict[str, tuple[str, ...]] = {
     "项目名称": ("项目名称",),
-    "项目编号": ("项目编号",),
+    "项目编号": ("项目编号", "政府采购编号", "采购代理编号", "采购编号"),
     "采购计划备案号": ("采购计划备案号",),
     "采购人名称": ("采购人名称",),
     "投标人": ("投标人", "投标人名称", "投标单位", "报价单位"),
@@ -70,7 +70,12 @@ def prefill_known(doc: Document, state: BidState) -> list[str]:
         value = values[field]
         if not value:
             continue
-        total = sum(fill_all_blanks(doc, syn, value) for syn in synonyms)
+        total = 0
+        for syn in synonyms:
+            n = fill_label_blank(doc, syn, value)   # 段内任意位置(句中括号/同段多标签)
+            if n == 0:
+                n = fill_all_blanks(doc, syn, value)  # 回退段首语义(含「投标人（签章）：」形态)
+            total += n
         if total:
             summary.append(f"{field}×{total}")
     return summary
