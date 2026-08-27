@@ -41,7 +41,13 @@ def _dump_llm_io(label: str, kind: str, text: str) -> None:
     """LLM 全量输入/输出转储到 run/llm_debug/<label>_<seq>_<kind>.txt,日志可指向。
 
     glob 计数定序号是有意的:fill 各阶段是独立进程,进程内计数器会撞号。
+    pytest 下必须静默跳过:单测经 FunctionModel 也会流经本函数,若不挡,
+    合成夹具会按 .latest 灌进真实 run 的调试目录(2026-08-27 实测污染 75/143)。
     """
+    import os
+
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
     try:
         root = runs_root()
         run = (root / ".latest").read_text(encoding="utf-8").strip()
