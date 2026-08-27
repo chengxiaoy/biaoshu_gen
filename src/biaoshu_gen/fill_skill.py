@@ -315,7 +315,8 @@ def dump_fill_points(doc) -> str:
         lines.append(f"[{i}]{'(线)' if has_blank else ''} {t[:50]}")
     lines.append("== 表格 ==")
     for i, t in enumerate(doc.tables):
-        head = " | ".join(c.text.strip()[:8] for c in t.rows[0].cells)
+        # 表头单元格不截断:模型须逐字回显完整表头作 table_header 关键词
+        head = " | ".join(c.text.strip() for c in t.rows[0].cells)
         lines.append(f"[T{i}] {head}  ({len(t.rows)}行)")
     return "\n".join(lines)
 

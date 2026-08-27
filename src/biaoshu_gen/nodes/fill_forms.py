@@ -33,15 +33,18 @@ class FormsFillError(RuntimeError):
 def _call_llm(agent, prompt: str):
     """run_sync 包装:网关偶发 finish_reason=error 等异常重试一次,仍失败转 FormsFillError。"""
     import time as _time
+    import logging
 
+    log = logging.getLogger(__name__)
     for attempt in range(2):
         try:
             return run_sync(agent, prompt).output
         except FormsFillError:
             raise
-        except Exception as e:                 # 网关/端点偶发错误
+        except Exception as e:                 # 网关/端点偶发错误(超时/finish_reason=error)
             if attempt:
                 raise FormsFillError(f"forms 填写失败：LLM 调用异常（{e}）") from e
+            log.warning("[forms] LLM 调用异常(%s),5s 后重试", e)
             _time.sleep(5)
     raise FormsFillError("forms 填写失败：LLM 调用异常")
 

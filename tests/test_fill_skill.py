@@ -5,7 +5,7 @@ from docx import Document
 
 from biaoshu_gen.fill_skill import (
     dump_fill_points, fill_all_blanks, fill_blank, fill_cell, find_para,
-    insert_picture_after, replace_in_para, run_fill_plan,
+    find_table, insert_picture_after, replace_in_para, run_fill_plan,
 )
 
 # 1x1 透明 PNG（构造插图用，无需 PIL）
@@ -126,6 +126,24 @@ def test_run_fill_plan_batch_and_errors(tmp_path: Path):
     assert find_para(d, "项目名称：").text == "项目名称：演示项目"      # 前三条已生效
     assert len(d.inline_shapes) == 1
     assert len(errors) == 1 and "不存在的段落" in errors[0]
+
+
+def test_dump_fill_points_shows_full_header_text(tmp_path: Path):
+    """表头地图不得截断:模型须能逐字回显完整表头作为 table_header 关键词。
+
+    真实事故:地图把'参数（型号、规格及参数说明）'截成 8 字,模型回显截断串
+    (甚至自行补字'等'),find_table 必然失配。
+    """
+    d = Document()
+    t = d.add_table(rows=2, cols=2)
+    t.cell(0, 0).text = "参数（型号、规格及参数说明）"
+    t.cell(0, 1).text = "备注"
+    src = tmp_path / "t.docx"
+    d.save(src)
+
+    doc = Document(str(src))
+    assert "参数（型号、规格及参数说明）" in dump_fill_points(doc)
+    assert find_table(doc, "参数（型号、规格及参数说明）", "备注") == 0   # 回环:地图所示即可用
 
 
 def test_dump_fill_points(tmp_path: Path):
