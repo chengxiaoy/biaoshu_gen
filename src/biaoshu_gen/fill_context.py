@@ -8,7 +8,9 @@ from pathlib import Path
 from docx import Document
 
 from .docx_io import template_has_section
-from .fill_skill import dump_fill_points, fill_all_blanks, fill_label_blank
+from .fill_skill import (
+    dump_fill_points, fill_all_blanks, fill_blank_before_label, fill_label_blank,
+)
 from .harness import HarnessTask, prepare_agent_workspace, run_harness_task
 from .kb import KnowledgeBase
 from .schemas import GlobalFacts, from_yaml_file
@@ -28,7 +30,7 @@ FIELD_SYNONYMS: dict[str, tuple[str, ...]] = {
     "项目编号": ("项目编号", "政府采购编号", "采购代理编号", "采购编号"),
     "采购计划备案号": ("采购计划备案号",),
     "采购人名称": ("采购人名称",),
-    "投标人": ("投标人", "投标人名称", "投标单位", "报价单位"),
+    "投标人": ("投标人", "投标人名称", "投标单位", "报价单位", "供应商名称", "单位名称"),
     "法定代表人": ("法定代表人", "法人代表"),
     "统一社会信用代码": ("统一社会信用代码", "信用代码"),
 }
@@ -75,7 +77,7 @@ def prefill_known(doc: Document, state: BidState) -> list[str]:
             n = fill_label_blank(doc, syn, value)   # 段内任意位置(句中括号/同段多标签)
             if n == 0:
                 n = fill_all_blanks(doc, syn, value)  # 回退段首语义(含「投标人（签章）：」形态)
-            total += n
+            total += n + fill_blank_before_label(doc, syn, value)  # __(标签) 文体
         if total:
             summary.append(f"{field}×{total}")
     return summary

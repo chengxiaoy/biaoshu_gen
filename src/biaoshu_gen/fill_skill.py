@@ -159,6 +159,35 @@ def _fill_blank_after(p: Paragraph, q: int, value: str) -> bool:
     return False
 
 
+def fill_blank_before_label(doc, label: str, value: str) -> int:
+    """填「空位在标签前」形态：__(标签)——下划线空位 run 后紧跟括号注记，
+    且括号内容**恰为** label 单一标签（commercial 部分的主要文体，如
+    「我系参加__（项目名称），采购计划编号__」）。
+
+    多标签并列（如「（项目名称、政府采购编号、采购代理编号）」）归属不明，不填；
+    括号内容须与 label 全等，防「（采购人单位名称）」误中「（单位名称）」。
+    """
+    import re as _re
+
+    n = 0
+    for p in doc.paragraphs:
+        runs = p.runs
+        for i in range(len(runs) - 1):
+            r = runs[i]
+            t = r.text or ""
+            if not t.strip() and t and _is_underlined(r):        # 下划线空白 run
+                keep = ""
+            elif t.strip() and set(t.strip()) <= UNDERLINE_CHARS:  # 下划线字符段
+                keep = "＿＿"
+            else:
+                continue
+            m = _re.match(r"\s*[（(]([^（）()]+)[）)]", runs[i + 1].text or "")
+            if m and m.group(1).strip() == label:
+                r.text = value + keep
+                n += 1
+    return n
+
+
 def fill_all_blanks(doc, prefix: str, value: str) -> int:
     """把**所有**以 prefix 开头的段落的填空线都填上 value，返回填写段数（预填已知值用）。
 

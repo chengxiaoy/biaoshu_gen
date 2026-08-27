@@ -128,6 +128,70 @@ def test_run_fill_plan_batch_and_errors(tmp_path: Path):
     assert len(errors) == 1 and "不存在的段落" in errors[0]
 
 
+def test_fill_blank_before_label_paren_annotation(tmp_path: Path):
+    """「空位在标签前」形态:__(标签)——下划线空位 run 后紧跟括号注记(commercial 部分
+    的主要文体)。仅括号内是单一标签时才填,多标签并列(如 项目名称、政府采购编号)
+    归属不明,不填留给 LLM。"""
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("我系参加")
+    p.add_run("                      ").underline = True
+    p.add_run("（项目名称），委托代理编号：")
+    p.add_run("               ").underline = True
+    p2 = d.add_paragraph()
+    p2.add_run("本公司参加")
+    p2.add_run("        ").underline = True
+    p2.add_run("（单位名称）的")
+    p3 = d.add_paragraph()                                 # 多标签括号:不填
+    p3.add_run("响应")
+    p3.add_run("                     ").underline = True
+    p3.add_run("（项目名称、政府采购编号、采购代理编号）响应文件")
+    src = tmp_path / "t.docx"
+    d.save(src)
+
+    from biaoshu_gen.fill_skill import fill_blank_before_label
+    d2 = Document(str(src))
+    assert fill_blank_before_label(d2, "项目名称", "实训室项目") == 1
+    texts = [x.text for x in d2.paragraphs]
+    assert texts[0].startswith("我系参加实训室项目（项目名称）")
+    assert "本公司参加        （单位名称）的" == texts[1]      # 单位名称未给值不动
+    assert "（项目名称、政府采购编号" in texts[2] and "实训室项目" not in texts[2]
+
+
+def test_fill_blank_before_label_in_prefill_known(tmp_path: Path, monkeypatch):
+    """预填第三模式:commercial 文体的 __(标签) 也由代码预填,prompt 标注勿重复。"""
+    monkeypatch.chdir(tmp_path)
+    from docx import Document
+
+    from biaoshu_gen.business import ensure_business_fields
+    from biaoshu_gen.fill_context import prefill_known
+    from biaoshu_gen.state import BidState, run_dir
+
+    tpl = tmp_path / "标书模板.docx"
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("本公司参加")
+    p.add_run("        ").underline = True
+    p.add_run("（单位名称）承建")
+    p2 = d.add_paragraph()
+    p2.add_run("我系参加")
+    p2.add_run("        ").underline = True
+    p2.add_run("（项目名称）磋商")
+    d.save(tpl)
+    state = BidState(run_id="run-1", template_docx_path=str(tpl))
+    ensure_business_fields(state)
+    fp = run_dir(state) / "03_facts.yaml"
+    fp.write_text(fp.read_text(encoding="utf-8")
+                  + 'template_fields:\n  项目名称: 演示项目\n', encoding="utf-8")
+
+    doc = Document(str(tpl))
+    summary = prefill_known(doc, state)
+    texts = [x.text for x in doc.paragraphs]
+    assert "本公司参加某某科技有限公司（待替换）（单位名称）承建" == texts[0]
+    assert "我系参加演示项目（项目名称）磋商" == texts[1]
+    assert "投标人×1" in summary and "项目名称×1" in summary
+
+
 def test_dump_fill_points_shows_full_header_text(tmp_path: Path):
     """表头地图不得截断:模型须能逐字回显完整表头作为 table_header 关键词。
 
