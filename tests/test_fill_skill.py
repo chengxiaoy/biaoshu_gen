@@ -231,6 +231,27 @@ def test_replace_in_para_normalizes_paren_width(tmp_path: Path):
     assert text == "致             某某科技有限公司："
 
 
+def test_cell_op_matches_table_despite_nbsp_and_caption_prefix(tmp_path: Path):
+    """真实模板形态:表头单元格含不间断空格(备\\xa0\\xa0注),且模型会把表标题拼进
+    表头关键词(货物说明一览表：序号)——find_table 须归一化匹配并容忍冒号前缀。"""
+    d = Document()
+    d.add_paragraph("货物说明一览表：")
+    t = d.add_table(rows=2, cols=3)
+    t.cell(0, 0).text = "序号"
+    t.cell(0, 1).text = "货物名称"
+    t.cell(0, 2).text = "备  注"
+    src = tmp_path / "t.docx"
+    d.save(src)
+
+    errors = run_fill_plan(str(src), str(tmp_path / "out.docx"), [
+        {"op": "cell", "table_header": ["货物说明一览表：序号", "货物名称", "备  注"],
+         "row": 1, "col": 1, "value": "工业机器人"},
+    ])
+    assert errors == []
+    d2 = Document(str(tmp_path / "out.docx"))
+    assert d2.tables[0].cell(1, 1).text == "工业机器人"
+
+
 def test_replace_keeps_unrelated_blank_runs_in_same_para(tmp_path: Path):
     """replace 只重写命中 run,不整段合并——同段下划线填空位须保留给后续 label op。
 

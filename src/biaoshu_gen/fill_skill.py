@@ -284,11 +284,20 @@ def insert_picture_after(doc, prefix: str, img: str, width_inch: float = 5.6,
 
 # ---------------- 声明式填空清单（一次执行、批量报错，压缩 harness 轮次） ----------------
 
+def _match_key(k: str, head: str) -> bool:
+    """表头关键词匹配:空白/不间断空格归一化;模型常把表标题拼进关键词
+    (「货物说明一览表：序号」),直接未中时剥掉冒号前缀再试。"""
+    norm = lambda s: " ".join(s.replace("\xa0", " ").split())
+    if norm(k) in norm(head):
+        return True
+    return "：" in k and norm(k.split("：")[-1]) in norm(head)
+
+
 def find_table(doc, *header_keywords: str) -> int:
     """按表头关键词定位表格（表头行含全部关键词），返回下标；找不到抛 RuntimeError。"""
     for i, t in enumerate(doc.tables):
         head = " ".join(c.text for c in t.rows[0].cells)
-        if all(k in head for k in header_keywords):
+        if all(_match_key(k, head) for k in header_keywords):
             return i
     raise RuntimeError(f"找不到表头含 {header_keywords} 的表格")
 
