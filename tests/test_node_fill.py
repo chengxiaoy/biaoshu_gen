@@ -127,17 +127,22 @@ def test_fill_forms_executes_llm_plan(tmp_path: Path, monkeypatch):
     assert len(make.calls) == 1                                    # 无报错不回炉
 
 
-def test_fill_forms_fails_fast_on_execution_errors(tmp_path, monkeypatch):
-    """_FIX_ROUNDS=0(用户设定,勿改回):执行报错不回炉,单次即败,由管线软失败放行。"""
+def test_fill_forms_keeps_product_on_execution_errors(tmp_path, monkeypatch):
+    """_FIX_ROUNDS=0(用户设定,勿改回):执行报错不回炉、单次即止。用户裁决(2026-08-27)
+    个别 op 报错不弃产物——记 error.log 供人工补,产物照常返回。"""
     state = _forms_state(tmp_path, monkeypatch)
-    bad = {"plan": [{"op": "blank", "prefix": "不存在的段落：", "value": "x"}]}
+    bad = {"plan": [{"op": "blank", "prefix": "不存在的段落：", "value": "x"},
+                    {"op": "blank", "prefix": "项目名称：", "value": "演示项目"}]}
     make = _fake_fill_make([bad])
     monkeypatch.setattr(ff, "make_agent", make)
 
-    import pytest
-    with pytest.raises(ff.FormsFillError):
-        ff.fill_forms_node(state)
+    updates = ff.fill_forms_node(state)
     assert len(make.calls) == 1                                    # 单次,无修正轮
+    assert updates["forms_docx_path"] and Path(updates["forms_docx_path"]).exists()
+    errlog = run_dir(state) / "06_fill" / "fill_forms.error.log"
+    assert "不存在的段落" in errlog.read_text(encoding="utf-8")   # 报错留痕
+    from docx import Document as _D
+    assert any("演示项目" in p.text for p in _D(updates["forms_docx_path"]).paragraphs)
 
 
 def test_commercial_only_harness_node_isolated_workspaces(tmp_path: Path, monkeypatch):

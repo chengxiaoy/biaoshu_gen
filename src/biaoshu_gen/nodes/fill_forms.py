@@ -131,7 +131,11 @@ def fill_forms_node(state: BidState) -> dict:
         shutil.copyfile(base, out)             # 重置到预填底稿,整计划干净重放
         errors = run_fill_plan(str(out), str(out), _ops_of(result))
     if errors:
-        raise FormsFillError(f"forms 填写失败：报错修正轮次耗尽（仍 {len(errors)} 条，"
-                             f"如 {errors[0]}）")
+        # 用户裁决(2026-08-27):个别 op 报错(签章行/无下划线段等不可填目标)不弃产物,
+        # 记 error.log 供人工补;节点级异常(LLM挂/校验失败)仍抛出走软失败
+        errfile = run_dir(state) / "06_fill" / "fill_forms.error.log"
+        errfile.write_text("plan 执行报错（产物已保留,以下空位需人工补）:\n"
+                           + "\n".join(f"- {e}" for e in errors), encoding="utf-8")
+        log.warning("[forms] %d 条 op 报错已记 %s,产物保留", len(errors), errfile)
     log.info("[forms] 产物 %s(%d 字节)", out, out.stat().st_size)
     return {"forms_docx_path": str(out)}
