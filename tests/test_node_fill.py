@@ -305,3 +305,25 @@ def test_fill_nodes_soft_fail_in_pipeline(tmp_path, monkeypatch):
     assert updates == {"forms_docx_path": ""}
     errlog = run_dir(state) / "06_fill" / "fill_forms.error.log"
     assert errlog.exists() and "模拟节点崩溃" in errlog.read_text(encoding="utf-8")
+
+
+def test_fill_forms_skips_label_ops_covered_by_prefill(tmp_path, monkeypatch):
+    """预填已覆盖字段:模型仍发同义 label op 时跳过而非报错——空位已被 facts 值
+    填上,再执行只会"未命中"报错;值以预填为准(VALUE_PRIORITY)。"""
+    from docx import Document
+
+    state = _forms_state(tmp_path, monkeypatch)
+    fp = run_dir(state) / "03_facts.yaml"
+    fp.write_text(fp.read_text(encoding="utf-8")
+                  + 'template_fields:\n  项目名称: 演示项目\n', encoding="utf-8")
+    plan = {"plan": [
+        {"op": "label", "label": "项目名称", "value": "模型自拟名称"},
+        {"op": "cell", "table_header": ["序号", "名称"], "row": 1, "col": 1, "value": "工业机器人"},
+    ]}
+    make = _fake_fill_make([plan])
+    monkeypatch.setattr(ff, "make_agent", make)
+
+    updates = ff.fill_forms_node(state)
+    assert updates["forms_docx_path"]                        # 未因 miss 报错软失败
+    texts = [p.text for p in Document(updates["forms_docx_path"]).paragraphs]
+    assert any("演示项目" in t and "模型自拟名称" not in t for t in texts)  # 预填值生效,op 被跳过

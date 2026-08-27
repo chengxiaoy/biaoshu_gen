@@ -12,7 +12,7 @@ from docx import Document
 
 from ..business import ensure_business_fields
 from ..fill_context import (
-    PREFILL_NOTE, VALUE_PRIORITY, build_fill_context, prefill_known,
+    FIELD_SYNONYMS, PREFILL_NOTE, VALUE_PRIORITY, build_fill_context, prefill_known,
     resolve_template_src,
 )
 from ..fill_skill import run_fill_plan
@@ -62,6 +62,10 @@ def _ops_of(result: FormsFill) -> list[dict]:
     return [op.model_dump(exclude_none=True) for op in result.plan]
 
 
+def _ops_of_list(ops) -> list[dict]:
+    return [op.model_dump(exclude_none=True) for op in ops]
+
+
 def fill_forms_node(state: BidState) -> dict:
     facts = ensure_business_fields(state)       # 企业/法人/信用代码缺失则 mock 并回写 facts.yaml
     tpl_src = resolve_template_src(state, "forms")
@@ -104,8 +108,17 @@ def fill_forms_node(state: BidState) -> dict:
     if result is None:
         raise FormsFillError(f"forms 填写失败：两次输出均未通过校验（最后错误：{err}）")
 
-    errors = run_fill_plan(str(out), str(out), _ops_of(result))
-    log.info("[forms] plan 共 %d 条 op,执行报错 %d 条%s", len(result.plan), len(errors),
+    # 预填已覆盖的字段(同义词级):模型仍发对应 label op 时跳过——空位已被填,
+    # 执行只会报"未命中";值以 facts 预填为准(VALUE_PRIORITY 约定)
+    done_labels = {syn for f in (s.split("×")[0] for s in prefilled)
+                   for syn in FIELD_SYNONYMS.get(f, ())}
+    kept = [op for op in result.plan
+            if not (op.op == "label" and op.label in done_labels)]
+    if len(kept) < len(result.plan):
+        log.info("[forms] %d 条 label op 已被预填覆盖,跳过", len(result.plan) - len(kept))
+
+    errors = run_fill_plan(str(out), str(out), _ops_of_list(kept))
+    log.info("[forms] plan 共 %d 条 op,执行报错 %d 条%s", len(kept), len(errors),
              "" if not errors else "\n  " + "\n  ".join(errors[:10]))
     rounds = 0
     while errors and rounds < _FIX_ROUNDS:

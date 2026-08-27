@@ -18,6 +18,9 @@ from docx.text.paragraph import Paragraph
 
 UNDERLINE_CHARS = set("＿＿___―—-") - set("")  # 全角/半角下划线
 
+# 全半角标点归一化表(一一对应单字符,归一化串下标与原文一致):LLM 回显宽度常漂移
+_WIDTH_NORM = str.maketrans({"（": "(", "）": ")", "：": ":", "，": ",", "；": ";"})
+
 # 标签之后的合法边界：分隔符/括号/空白/段末/下划线字符（防 "投标人" 误中 "投标人地址"）
 _BOUNDARY_CHARS = set("：:（）() \t，、；") | UNDERLINE_CHARS
 
@@ -88,22 +91,25 @@ def fill_label_blank(doc, label: str, value: str) -> int:
     标签边界护栏同预填：标签前须是段首/分隔符/括号/空白/下划线，防前缀误中。
     """
     n = 0
+    label_n = label.translate(_WIDTH_NORM)      # 模型回显宽度漂移:全半角归一化后匹配
     for p in doc.paragraphs:
         text = p.text
+        text_n = text.translate(_WIDTH_NORM)    # 1:1 映射,归一化下标=原文下标
         pos = 0
         while True:
-            idx = text.find(label, pos)
+            idx = text_n.find(label_n, pos)
             if idx < 0:
                 break
             pos = idx + len(label)
-            if idx > 0 and text[idx - 1] not in _BOUNDARY_CHARS:
+            if idx > 0 and text_n[idx - 1] not in _BOUNDARY_CHARS:
                 continue                       # 边界不符（如「分包号」误中「包号」）
             end = idx + len(label)
-            if end < len(text) and text[end] not in _BOUNDARY_CHARS:
+            if end < len(text_n) and text_n[end] not in _BOUNDARY_CHARS:
                 continue                       # 段首匹配也须验证后边界（「投标人地址」≠「投标人」）
             if _fill_blank_after(p, idx + len(label), value):
                 n += 1
                 text = p.text                  # 段文本已变,重找后续标签
+                text_n = text.translate(_WIDTH_NORM)
                 pos = idx + len(label) + len(value)
     return n
 
@@ -225,9 +231,8 @@ def replace_in_para(doc, prefix: str, old: str, new: str) -> Paragraph:
         matches.append((start_at, start_at + len(old)))
         start_at = full.find(old, start_at + len(old))
     if not matches:
-        norm = str.maketrans({"（": "(", "）": ")", "：": ":", "，": ",", "；": ";"})
-        nfull = full.translate(norm)
-        nold = old.translate(norm)
+        nfull = full.translate(_WIDTH_NORM)
+        nold = old.translate(_WIDTH_NORM)
         start_at = nfull.find(nold)
         while start_at >= 0:                               # 归一化命中
             matches.append((start_at, start_at + len(nold)))

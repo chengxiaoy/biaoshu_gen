@@ -385,3 +385,20 @@ def test_label_op_tolerates_missing_colon_and_cell_grows_rows(tmp_path: Path):
     d2 = Document(str(out))
     assert "HN-2026-001" in d2.paragraphs[0].text
     assert len(d2.tables[0].rows) == 3 and d2.tables[0].cell(2, 1).text == "新增行值"
+
+
+def test_label_op_matches_despite_paren_width(tmp_path: Path):
+    """模型半角括号 vs 模板全角('供应商名称(盖单位章)'对'供应商名称（盖单位章）'):
+    label 匹配与 replace 同样做宽度归一化。"""
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("供应商名称（盖单位章）：")
+    p.add_run("        ").underline = True
+    src = tmp_path / "t.docx"
+    d.save(src)
+
+    errors = run_fill_plan(str(src), str(tmp_path / "out.docx"),
+                           [{"op": "label", "label": "供应商名称(盖单位章)", "value": "某公司"}])
+    assert errors == []
+    text = Document(str(tmp_path / "out.docx")).paragraphs[0].text
+    assert text == "供应商名称（盖单位章）：某公司"
