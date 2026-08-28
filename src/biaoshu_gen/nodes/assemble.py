@@ -35,6 +35,13 @@ def _find_range(ranges, keywords: tuple[str, ...]):
     return None
 
 
+def _body_children_count(path: str | Path) -> int:
+    """docx body 顶层子元素数(装配膨胀守卫的切片基准)。"""
+    from docx import Document as _Doc
+
+    return len(list(_Doc(str(path)).element.body.iterchildren()))
+
+
 def _content_elements(md: str) -> list:
     """把 markdown 渲染到临时文档，返回其 body 元素（不含 sectPr）。"""
     scratch = Document()
@@ -128,6 +135,17 @@ def _assemble_from_parts(state: BidState, manifest: dict, dest: Path, body_md: s
                 legacy = getattr(state, f"{bucket}_docx_path", "")
                 if legacy and Path(legacy).exists():
                     src_path = legacy                  # 桶级主产物只挂首 run,防重复
+            if src_path and Path(src_path).exists():
+                # 膨胀守卫:产物元素数远超模板切片(harness 复述了其他章节内容)时弃用——
+                # 装配宁用原始 part 也不让幻觉扩写污染草稿
+                slice_n = _body_children_count(entry["path"])
+                prod_n = _body_children_count(src_path)
+                if prod_n > max(3 * slice_n, slice_n + 30):
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "[assemble] %s 产物 %d 元素远超切片 %d,疑似复述扩写,回退原始 part",
+                        key, prod_n, slice_n)
+                    src_path = None
             if not (src_path and Path(src_path).exists()):
                 src_path = entry["path"]               # 回退原始 part(未填/跳过桶)
             if not (src_path and Path(src_path).exists()):

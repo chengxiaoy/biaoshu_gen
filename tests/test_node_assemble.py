@@ -301,3 +301,42 @@ def test_assemble_stitches_interleaved_runs_in_document_order(tmp_path: Path, mo
     i_mid = joined.index("身份证明已填")
     i_qual = joined.index("资格证明文件 模板正文。")
     assert i_chapter < i_letter < i_mid < i_qual          # 顺序还原,不再整桶前置
+
+
+def test_assemble_guards_against_bloated_product(tmp_path: Path, monkeypatch):
+    """膨胀守卫:桶级产物元素数远超模板切片(harness 复述扩写)时弃用产物,
+    回退原始 part——software 实测 flash 把 2 元素头切片扩成 440 元素整章。"""
+    from biaoshu_gen.nodes import split_template as st
+
+    monkeypatch.chdir(tmp_path)
+    d = run_dir(BidState(run_id="run-1"))
+    ws = d / "02_template"
+    ws.mkdir(parents=True)
+    tpl = ws / "标书模板.docx"
+    doc = Document()
+    doc.add_paragraph("第七章 投标文件的格式")          # commercial 切片:2 元素
+    for title in ("投标函及报价文件", "六、项目实施方案"):
+        doc.add_heading(title, level=2)
+        doc.add_paragraph(f"{title} 模板正文。")
+    doc.save(tpl)
+    parts = st.split_template_node(
+        BidState(run_id="run-1", tender_path=str(tpl), template_docx_path=str(tpl))
+    )["template_parts"]
+
+    bloated = d / "06_fill" / "commercial" / "commercial.docx"   # 产物:复述扩写
+    bloated.parent.mkdir(parents=True, exist_ok=True)
+    bd = Document()
+    bd.add_paragraph("第七章 投标文件的格式")
+    for i in range(60):                                          # 61 元素 >> 2*3+30
+        bd.add_paragraph(f"复述内容{i}")
+    bd.save(bloated)
+
+    body = d / "05_body"; body.mkdir(parents=True)
+    (body / "body.md").write_text("# 1 总体\n思路内容。", encoding="utf-8")
+    state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
+                     template_docx_path=str(tpl), template_parts=parts,
+                     commercial_docx_path=str(bloated))
+    updates = asm.assemble_node(state)
+    texts = [p.text for p in Document(updates["draft_docx_path"]).paragraphs]
+    assert not any("复述内容" in t for t in texts)               # 产物被守卫拒绝
+    assert sum(1 for t in texts if t == "第七章 投标文件的格式") == 1  # 原始切片就位
