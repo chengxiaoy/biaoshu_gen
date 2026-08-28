@@ -332,3 +332,22 @@ def test_fill_forms_skips_label_ops_covered_by_prefill(tmp_path, monkeypatch):
     assert updates["forms_docx_path"]                        # 未因 miss 报错软失败
     texts = [p.text for p in Document(updates["forms_docx_path"]).paragraphs]
     assert any("演示项目" in t and "模型自拟名称" not in t for t in texts)  # 预填值生效,op 被跳过
+
+
+def test_commercial_tiny_part_skips_fill(tmp_path, monkeypatch):
+    """切片过小(<5 元素,如章节封面)无可填内容:直接跳过填充,不烧 LLM——
+    flash 曾把 3 元素切片从 tender.md 扩写成 441 元素整章。"""
+    from docx import Document
+
+    state = _with_template(tmp_path, monkeypatch, text="商务部分\n业绩证明文件")
+    tiny = tmp_path / "tiny.docx"
+    d = Document()
+    d.add_paragraph("第七章 投标文件的格式")
+    d.save(tiny)
+    state = state.model_copy(update={"template_parts": {"commercial": str(tiny)}})
+    captured = []
+    _patch_fill_harness(monkeypatch, captured)
+
+    updates = com.commercial_node(state)
+    assert updates["commercial_docx_path"] == ""       # 跳过,产物置空
+    assert captured == []                              # 未发起任何 harness 调用

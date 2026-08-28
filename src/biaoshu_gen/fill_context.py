@@ -181,6 +181,11 @@ def run_fill_node(state: BidState, *, subdir: str, output_field: str, output_nam
     if state.fill_ws_key:                       # 同桶附加段:工作区按 run 键隔离
         subdir = f"06_fill/{state.fill_ws_key}"
     using_part = tpl_src != (state.template_docx_path or "")
+    if using_part:                              # 切片过小=无可填内容(如章节封面 3 元素):
+        n_children = len(list(Document(str(tpl_src)).element.body.iterchildren()))
+        if n_children < 5:                      # 跳过填充——flash 曾强行从 tender.md
+            print(f"ℹ {subdir} part 仅 {n_children} 元素,无可填内容,跳过(防复述扩写)。")
+            return {output_field: ""}           # 扩写成整章,白烧 LLM 还需守卫兜底
     if required_keyword and not using_part and \
             not template_has_section(Path(tpl_src), required_keyword):
         print(f"ℹ 响应模板中无「{required_keyword}」，跳过 {subdir} 节点。")
