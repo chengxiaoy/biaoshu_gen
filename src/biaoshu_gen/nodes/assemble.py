@@ -42,10 +42,13 @@ def _body_children_count(path: str | Path) -> int:
     return len(list(_Doc(str(path)).element.body.iterchildren()))
 
 
-def _content_elements(md: str) -> list:
-    """把 markdown 渲染到临时文档，返回其 body 元素（不含 sectPr）。"""
+def _content_elements(md: str, heading_offset: int = 0) -> list:
+    """把 markdown 渲染到临时文档，返回其 body 元素（不含 sectPr）。
+
+    heading_offset:标题按宿主锚点层级降级(#70 目录层级保证)。
+    """
     scratch = Document()
-    markdown_to_docx(scratch, md)
+    markdown_to_docx(scratch, md, heading_offset=heading_offset)
     return [el for el in scratch.element.body.iterchildren()
             if el.tag.split("}")[-1] != "sectPr"]
 
@@ -122,7 +125,10 @@ def _assemble_from_parts(state: BidState, manifest: dict, dest: Path, body_md: s
             else:
                 tech = _find_range(docx_block_ranges(part), _TECH_KEYWORDS)
                 if tech is not None:
-                    replace_elements(tech.elements[1:], _content_elements(body_md))
+                    # 正文标题按锚点层级降级:锚 H2 时正文 # → H2,目录层级不断裂(#70)
+                    offset = max(tech.level - 1, 0)
+                    replace_elements(tech.elements[1:],
+                                     _content_elements(body_md, heading_offset=offset))
                 else:
                     markdown_to_docx(part, body_md)
                 body_injected = True
@@ -186,7 +192,8 @@ def assemble_node(state: BidState) -> dict:
     # 技术方案正文 -> 锚定"技术部分"区间（保留锚标题，替换区间其余内容）
     tech = _find_range(docx_block_ranges(doc), _TECH_KEYWORDS)
     if tech is not None:
-        replace_elements(tech.elements[1:], _content_elements(body_md))
+        offset = max(tech.level - 1, 0)                # 正文标题随锚点层级降级(#70)
+        replace_elements(tech.elements[1:], _content_elements(body_md, heading_offset=offset))
     else:
         doc.add_page_break()
         markdown_to_docx(doc, "# 技术方案\n\n" + body_md)

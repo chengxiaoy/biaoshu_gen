@@ -340,3 +340,38 @@ def test_assemble_guards_against_bloated_product(tmp_path: Path, monkeypatch):
     texts = [p.text for p in Document(updates["draft_docx_path"]).paragraphs]
     assert not any("复述内容" in t for t in texts)               # 产物被守卫拒绝
     assert sum(1 for t in texts if t == "第七章 投标文件的格式") == 1  # 原始切片就位
+
+
+def test_assemble_demotes_body_headings_to_anchor_level(tmp_path: Path, monkeypatch):
+    """#70:技术节注入的正文标题须降级到锚点层级——锚是 H2 时正文 H1→H2、H2→H3,
+    保证目录层级不断裂(正文 H1 曾直接成章,与宿主标题平级)。"""
+    from biaoshu_gen.nodes import split_template as st
+
+    monkeypatch.chdir(tmp_path)
+    d = run_dir(BidState(run_id="run-1"))
+    ws = d / "02_template"
+    ws.mkdir(parents=True)
+    tpl = ws / "标书模板.docx"
+    doc = Document()
+    doc.add_paragraph("第五章 响应文件组成")
+    for title in ("一、磋商响应声明", "六、项目实施方案", "七、合同条款偏离表"):
+        doc.add_heading(title, level=2)
+        doc.add_paragraph(f"{title} 模板正文。")
+    doc.save(tpl)
+    parts = st.split_template_node(
+        BidState(run_id="run-1", tender_path=str(tpl), template_docx_path=str(tpl))
+    )["template_parts"]
+
+    body = d / "05_body"
+    body.mkdir(parents=True)
+    (body / "body.md").write_text(
+        "# 1 总体思路\n\n总体内容。\n\n## 1.1 实施要点\n\n要点内容。", encoding="utf-8")
+    state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
+                     template_docx_path=str(tpl), template_parts=parts,
+                     forms_docx_path="", deviation_docx_path="", commercial_docx_path="")
+    updates = asm.assemble_node(state)
+    doc2 = Document(updates["draft_docx_path"])
+    styles = {p.text.strip(): p.style.name for p in doc2.paragraphs if p.text.strip()}
+    assert styles["1 总体思路"] == "Heading 2"          # H1 → 锚点级
+    assert styles["1.1 实施要点"] == "Heading 3"        # H2 → 锚点+1
+    assert styles["六、项目实施方案"] == "Heading 2"     # 宿主锚点不动

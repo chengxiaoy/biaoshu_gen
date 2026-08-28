@@ -242,3 +242,35 @@ def test_classify_sections_content_fallback_front_attachment_table():
     r = pt.classify_sections(secs)
     assert 1 in r["metadata"]
     assert 2 not in r["metadata"]
+
+
+def test_parse_groups_extract_concurrently(tmp_path: Path, monkeypatch):
+    """#69:各组抽取并发执行——全部组任务必须在彼此完成前都开工(屏障超时即败)。"""
+    import threading
+
+    from biaoshu_gen.schemas import InvalidationItems
+
+    state = _state(tmp_path, monkeypatch)
+    outputs = {TenderMetadata: TenderMetadata(project_name="A 项目"),
+               TenderRequirements: TenderRequirements(tech_requirements=["R1"]),
+               ScoringStandards: ScoringStandards(price_rules="B 规则"),
+               InvalidationItems: InvalidationItems(items=[])}
+    barrier = threading.Barrier(3, timeout=8)          # 3 组有路由任务;串行则首组超时炸
+
+    def fake_run_sync(agent, prompt):
+        barrier.wait()
+        class _R:
+            output = outputs[agent.output_type]
+        return _R()
+
+    class _A:
+        def __init__(self, tp):
+            self.output_type = tp
+
+    monkeypatch.setattr(pt, "make_agent", lambda tp, sp, retries=2: _A(tp))
+    monkeypatch.setattr(pt, "run_sync", fake_run_sync)
+
+    updates = pt.parse_tender_node(state)
+    assert updates["metadata"].project_name == "A 项目"
+    assert updates["requirements"].tech_requirements == ["R1"]
+    assert updates["scoring"].price_rules == "B 规则"

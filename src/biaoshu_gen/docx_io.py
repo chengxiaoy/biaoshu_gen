@@ -104,16 +104,21 @@ def _add_styled(doc: DocumentType, text: str, style: str):
         return doc.add_paragraph(text)
 
 
-def markdown_to_docx(doc: DocumentType, md: str) -> None:
-    """极量版 Markdown → docx：标题/列表/段落（POC 够用）。"""
+def markdown_to_docx(doc: DocumentType, md: str, heading_offset: int = 0) -> None:
+    """极量版 Markdown → docx：标题/列表/段落（POC 够用）。
+
+    heading_offset:标题整体降级偏移(注入宿主文档时按锚点层级对齐,
+    如锚为 Heading2 则正文 # → Heading2)。
+    """
     for line in md.splitlines():
         s = line.strip()
         if not s:
             continue
         m = re.match(r"^(#{1,4})\s+(.*)$", s)
         if m:
+            level = max(1, min(4, len(m.group(1)) + heading_offset))
             try:
-                doc.add_heading(m.group(2), level=len(m.group(1)))
+                doc.add_heading(m.group(2), level=level)
             except KeyError:                      # 模板缺 Heading N 样式时回退
                 doc.add_paragraph(m.group(2))
         elif s.startswith(("- ", "* ")):
