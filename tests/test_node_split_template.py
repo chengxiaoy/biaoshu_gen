@@ -75,12 +75,12 @@ def test_split_by_heading_rules(tmp_path, monkeypatch):
     assert len(Document(parts["deviation"]).tables) == 2
     assert texts(parts["technical"]) == ["六、项目实施方案", "六、项目实施方案 正文。"]
 
-    # parts.yaml:order 仍按各桶首段原序(前言归 commercial 故居首);entries 按全序
-    assert manifest["order"] == ["commercial", "forms", "technical", "deviation"]
+    # parts.yaml:entries-only;primary 标记各桶首段,序列按文档原序
     assert [e["key"] for e in manifest["entries"]] == [
         "commercial", "forms", "commercial_2", "forms_2",
         "technical", "deviation", "commercial_3"]
-    assert "七、合同条款偏离表" in manifest["parts"]["deviation"]["sections"]
+    assert [e["primary"] for e in manifest["entries"]] == [
+        True, True, False, False, True, True, False]
 
 
 def test_split_untitled_template_via_llm(tmp_path, monkeypatch):

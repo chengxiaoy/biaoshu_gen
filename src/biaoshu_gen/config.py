@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     harness_max_turns: int = 100
     kb_top_k: int = 5
     body_concurrency: int = 6         # 正文按三级小节并发生成的并发数
+    parse_concurrency: int = 6        # parse 分组抽取的并发数(#69)
 
 
 @lru_cache

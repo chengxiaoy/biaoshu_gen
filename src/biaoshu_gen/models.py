@@ -1,5 +1,6 @@
 """PydanticAI Agent 工厂：任意 OpenAI 兼容端点（配置见 config，协议与 harness 三件套独立）。"""
 import logging
+import os
 import time
 
 import httpx
@@ -46,8 +47,6 @@ def _dump_llm_io(label: str, kind: str, text: str) -> None:
     pytest 下必须静默跳过:单测经 FunctionModel 也会流经本函数,若不挡,
     合成夹具会按 .latest 灌进真实 run 的调试目录(2026-08-27 实测污染 75/143)。
     """
-    import os
-
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return
     try:

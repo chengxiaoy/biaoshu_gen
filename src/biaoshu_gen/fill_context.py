@@ -3,11 +3,12 @@
 三个 fill 节点（forms/commercial/deviation）差异仅在于：输出字段名、附加输入、
 有无"模板须含某小节"门槛、业务企业资料。统一收敛到 run_fill_node 一个驱动。
 """
+import logging
 from pathlib import Path
 
 from docx import Document
 
-from .docx_io import template_has_section
+from .docx_io import body_children_count, template_has_section
 from .fill_skill import (
     dump_fill_points, fill_all_blanks, fill_blank_before_label, fill_label_blank,
 )
@@ -17,6 +18,11 @@ from .schemas import GlobalFacts, from_yaml_file
 from .state import BidState, run_dir
 
 # 小节判定/组装锚定关键词的单一注册表（gate 与 assemble 共用，避免两处定义漂移）
+log = logging.getLogger(__name__)
+
+# 切片小于该 body 元素数视为"无可填内容"(如 3 元素章节封面),跳过 LLM 填充
+MIN_FILLABLE_CHILDREN = 5
+
 SECTION_KEYWORDS: dict[str, tuple[str, ...]] = {
     "commercial": ("商务部分", "商务"),
     "deviation": ("偏离表", "偏离"),
@@ -126,64 +132,66 @@ def resolve_template_src(state: BidState, part: str | None) -> str:
     return state.template_docx_path or ""
 
 
-def merge_extra_entry_fills(state: BidState, bucket: str, core, out_field: str) -> dict:
-    """同桶多区间(parts.yaml 的 entries):首段已由节点主流程填充,
-    其余附加段克隆 state 独立走一遍同一核心函数。
+def fill_ws_subdir(bucket: str, ws_key: str = "") -> str:
+    """fill 工作区子目录的唯一推导点(run_dir 相对):主桶用桶名,附加段用 run 键隔离。"""
+    return f"06_fill/{ws_key or bucket}"
 
-    返回 {run_key: 产物路径} 写入 state 的 extra_products_<bucket>;
+
+def run_with_extras(state: BidState, bucket: str, core) -> dict:
+    """fill 节点统一入口:主流程填充首 run + 同桶附加段各跑一次独立工作区。
+
+    core 签名 (state, ws_key="") -> dict;返回 updates 并附 extra_products。
     单个附加段失败不拖垮整体(记 warning,装配回退该段原始 part)。
     """
-    import logging
-
-    from .nodes.split_template import load_entries, read_parts_yaml   # 延迟导入避免环
-
-    log = logging.getLogger(__name__)
-    prods: dict[str, str] = {}
-    seen_primary = False
-    try:
-        entries = [e for e in load_entries(read_parts_yaml(run_dir(state)))
-                   if e["bucket"] == bucket]
-    except Exception:
-        return prods
-    for e in entries:
-        if not seen_primary:
-            seen_primary = True                                    # 第一条即主流程已处理
-            continue
-        sub = state.model_copy(update={"template_parts": {bucket: e["path"]},
-                                       "fill_ws_key": e["key"]})
+    updates = core(state)
+    extras: dict[str, str] = {}
+    if updates.get(f"{bucket}_docx_path"):
         try:
-            up = core(sub)
-        except Exception as exc:
-            log.warning("[%s] 附加段 %s 填充失败(%s),装配将回退原始 part",
-                        bucket, e["key"], exc)
-            continue
-        if up.get(out_field):
-            prods[e["key"]] = up[out_field]
-    if prods:
-        log.info("[%s] %d 个附加区间已完成独立填充", bucket, len(prods))
-    return prods
+            from .nodes.split_template import load_entries, read_parts_yaml  # 避免环
+            entries = [e for e in load_entries(read_parts_yaml(run_dir(state)))
+                       if e["bucket"] == bucket and not e.get("primary")]
+        except Exception:
+            entries = []
+        for e in entries:
+            sub = state.model_copy(update={"template_parts": {bucket: e["path"]}})
+            try:
+                up = core(sub, ws_key=e["key"])
+            except Exception as exc:
+                log.warning("[%s] 附加段 %s 填充失败(%s),装配将回退原始 part",
+                            bucket, e["key"], exc)
+                continue
+            path = up.get(f"{bucket}_docx_path")
+            if path:
+                extras[e["key"]] = path
+        if extras:
+            log.info("[%s] %d 个附加区间已完成独立填充", bucket, len(extras))
+    if extras:
+        updates["extra_products"] = extras
+    return updates
 
 
 def run_fill_node(state: BidState, *, subdir: str, output_field: str, output_name: str,
                   extra_inputs: list[tuple[Path, str]], system: str,
                   build_user_prompt,
                   required_keyword: str | None = None,
-                  part: str | None = None) -> dict:
+                  part: str | None = None,
+                  ws_key: str = "") -> dict:
     """fill 三节点公共驱动：门槛判断 -> 工作区 -> 预填确定值 -> 预注入上下文 -> harness。
 
     build_user_prompt(output) -> str 由调用方构造（forms 需企业资料）。
     part 指定四分拆 bucket 时工作区模板用对应 part,缺失回退整模板。
+    ws_key:附加段隔离工作区名(fill_ws_dir 唯一推导)。
     """
     tpl_src = resolve_template_src(state, part)
     if not tpl_src:
         print(f"ℹ 无响应模板，跳过 {subdir} 节点。")
         return {output_field: ""}
-    if state.fill_ws_key:                       # 同桶附加段:工作区按 run 键隔离
-        subdir = f"06_fill/{state.fill_ws_key}"
+    if part:
+        subdir = fill_ws_subdir(part, ws_key)
     using_part = tpl_src != (state.template_docx_path or "")
     if using_part:                              # 切片过小=无可填内容(如章节封面 3 元素):
-        n_children = len(list(Document(str(tpl_src)).element.body.iterchildren()))
-        if n_children < 5:                      # 跳过填充——flash 曾强行从 tender.md
+        n_children = body_children_count(tpl_src)
+        if n_children < MIN_FILLABLE_CHILDREN:  # 跳过填充——flash 曾强行从 tender.md
             print(f"ℹ {subdir} part 仅 {n_children} 元素,无可填内容,跳过(防复述扩写)。")
             return {output_field: ""}           # 扩写成整章,白烧 LLM 还需守卫兜底
     if required_keyword and not using_part and \

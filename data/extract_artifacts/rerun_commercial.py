@@ -29,7 +29,7 @@ print("commercial 结果:", {k: str(v)[:60] for k, v in updates.items()}, flush=
 
 merged = state.model_copy(update={
     "commercial_docx_path": updates.get("commercial_docx_path", state.commercial_docx_path),
-    "extra_products_commercial": updates.get("extra_products_commercial") or {},
+    "extra_products": updates.get("extra_products") or {},
     "draft_version": state.draft_version,   # v2 = +1
 })
 final = assemble_node(merged)

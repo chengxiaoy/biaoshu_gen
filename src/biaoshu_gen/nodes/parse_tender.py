@@ -4,6 +4,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
+from ..config import get_settings
 from ..docx_io import DocxSection, docx_to_sections, needs_structure_fallback, sections_to_markdown
 from ..models import make_agent, run_sync
 from ..prompts.parse_tender import SYSTEM_EXTRACT, build_extract_prompt
@@ -146,27 +147,27 @@ def parse_tender_node(state: BidState) -> dict:
     # 4 组×多批次此前纯串行,是 parse 阶段的主要时延;每任务独立 agent(线程安全)
     from concurrent.futures import ThreadPoolExecutor
 
-    results: dict[str, BaseModel] = {}
-    tasks: list[tuple[str, str, object, list]] = []     # (group, prompt, agent, batch)
+    results: dict[str, BaseModel] = {g: tp() for g, (tp, _) in GROUPS.items()}
+    tasks: list[tuple[str, str, object]] = []           # (group, prompt, agent)
     for group, (tp, desc) in GROUPS.items():
         group_sections = [sections[i - 1] for i in by_group[group]]
         if not group_sections:
-            results[group] = tp()
             continue
         for batch in _batches(group_sections):
             prompt = build_extract_prompt(desc, "\n\n".join(
                 (f"{'#' * s.level} {s.title}\n\n" if s.level else "") + s.content
                 for s in batch))
-            tasks.append((group, prompt, make_agent(tp, SYSTEM_EXTRACT), batch))
+            tasks.append((group, prompt, make_agent(tp, SYSTEM_EXTRACT)))
 
-    with ThreadPoolExecutor(max_workers=min(6, max(1, len(tasks)))) as ex:
+    with ThreadPoolExecutor(max_workers=min(get_settings().parse_concurrency,
+                                            max(1, len(tasks)))) as ex:
         submitted = [(group, ex.submit(run_sync, agent, prompt))
-                     for group, prompt, agent, _batch in tasks]
+                     for group, prompt, agent in tasks]
         per_group: dict[str, list] = {}
         for group, fut in submitted:                   # 按提交序收果:合并语义确定
             per_group.setdefault(group, []).append(fut.result().output)
     for group, objs in per_group.items():
-        results.setdefault(group, _merge(objs) if len(objs) > 1 else objs[0])
+        results[group] = _merge(objs) if len(objs) > 1 else objs[0]
 
     # ③ 落盘（tender.md 复用已切好的 sections，不二次解析；routing.yaml 路由透明化）
     d = run_dir(state) / "01_parse"

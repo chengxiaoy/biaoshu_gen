@@ -274,7 +274,7 @@ def test_assemble_stitches_interleaved_runs_in_document_order(tmp_path: Path, mo
     )["template_parts"]
     man = st.read_parts_yaml(d)
     keys = [e["key"] for e in man["entries"]]
-    assert "commercial_2" in keys                        # (四) 为 commercial 第二区间
+    assert "commercial_2" in keys and         [e for e in man["entries"] if e["key"] == "commercial"][0]["primary"] is True                        # (四) 为 commercial 第二区间
 
     # 附加段独立填充产物(带标记),主 forms 用真实填充
     def _product(path: Path, marker: str):
@@ -290,7 +290,7 @@ def test_assemble_stitches_interleaved_runs_in_document_order(tmp_path: Path, mo
     state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
                      template_docx_path=str(tpl), template_parts=parts,
                      forms_docx_path=str(filled_forms),
-                     extra_products_commercial={
+                     extra_products={
                          "commercial_2": _product(d / "06_fill" / "commercial_2" /
                                                   "commercial.docx", "身份证明已填")})
     updates = asm.assemble_node(state)

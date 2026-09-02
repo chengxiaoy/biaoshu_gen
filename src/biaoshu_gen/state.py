@@ -1,5 +1,7 @@
 """LangGraph 全局状态：节点返回 dict 部分更新本模型字段。"""
+import operator
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import BaseModel
 
@@ -38,11 +40,9 @@ class BidState(BaseModel):
     deviation_docx_path: str = ""
     commercial_docx_path: str = ""
     template_parts: dict[str, str] = {}    # 模板四分拆:bucket -> part docx 路径(各桶首段)
-    # 同桶多区间时附加段的填充产物 run_key -> docx 路径(fill 各写己键,无并行覆盖冲突)
-    fill_ws_key: str = ""                  # 附加段独立工作区名(默认空=主桶目录)
-    extra_products_forms: dict[str, str] = {}
-    extra_products_deviation: dict[str, str] = {}
-    extra_products_commercial: dict[str, str] = {}
+    # 同桶多区间时附加段的填充产物 run_key -> docx 路径。
+    # Annotated reducer:三个 fill 节点在并行 superstep 各写己键,or 合并不互相覆盖
+    extra_products: Annotated[dict[str, str], operator.or_] = {}
 
     # 07_draft
     draft_docx_path: str = ""

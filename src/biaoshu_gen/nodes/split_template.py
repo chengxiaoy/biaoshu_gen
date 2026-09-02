@@ -137,7 +137,7 @@ def read_parts_yaml(run: Path) -> dict:
 
 
 def load_entries(manifest: dict) -> list[dict]:
-    """取装配用的有序 run 条目;老格式(无 entries)从 order+parts 合成单条目。"""
+    """取装配用的有序 run 条目;老格式(无 entries)从 order+parts 合成条目(读侧唯一兼容垫)。"""
     if manifest.get("entries"):
         return sorted(manifest["entries"], key=lambda e: e["first_element_index"])
     out = []
@@ -145,13 +145,13 @@ def load_entries(manifest: dict) -> list[dict]:
         info = manifest.get("parts", {}).get(key) or {}
         if info.get("path"):
             out.append({"key": key, "bucket": key, "path": info["path"],
-                        "sections": info.get("sections", []),
+                        "primary": True,
                         "first_element_index": info.get("first_element_index", 0)})
     return sorted(out, key=lambda e: e["first_element_index"])
 
 
-def _runs_from_assign(assign: dict[str, list[int]]) -> list[tuple[str, list[int], str]]:
-    """按元素下标轴合并相邻同桶 → 连续区间 runs[(bucket, indexes, 末标题)]。
+def _runs_from_assign(assign: dict[str, list[int]]) -> list[tuple[str, list[int]]]:
+    """按元素下标轴合并相邻同桶 → 连续区间 runs[(bucket, indexes)]。
 
     同桶不相邻(交错模板)会产生同桶多个 run——这是 software 招标文件
     ((四)(五)商务内容嵌在投标函与资格之间)致装配乱序的根因,run 粒度保留原序。
@@ -168,8 +168,7 @@ def _runs_from_assign(assign: dict[str, list[int]]) -> list[tuple[str, list[int]
             runs[-1][1].append(i)
         else:
             runs.append((bucket, [i]))
-    # 附各 run 收尾时的最近标题(展示用);近似即可
-    return [(b, idxs, "") for b, idxs in runs]
+    return runs
 
 
 def split_template_node(state: BidState) -> dict:
@@ -184,36 +183,30 @@ def split_template_node(state: BidState) -> dict:
     assign = _split_by_headings(doc)
     if assign is None:
         assign = _split_by_llm(doc, tpl)
-    sections: dict[str, list[str]] = assign.pop("_sections")  # type: ignore[arg-type]
+    assign.pop("_sections")                                # type: ignore[arg-type]
 
     runs = _runs_from_assign(assign)
 
-    manifest: dict[str, dict] = {}
     template_parts: dict[str, str] = {}
     entries: list[dict] = []
     seen: dict[str, int] = {}                              # 桶 -> 已见 run 数
-    for bucket, indexes, _tail in runs:
+    for bucket, indexes in runs:
         nth = seen.get(bucket, 0)
         seen[bucket] = nth + 1
-        key = bucket if nth == 0 else f"{bucket}_{nth + 1}"
+        primary = nth == 0
+        key = bucket if primary else f"{bucket}_{nth + 1}"
         stem = Path(PART_NAMES[bucket]).stem
-        name = PART_NAMES[bucket] if nth == 0 else f"{stem}_{nth + 1}.docx"
+        name = PART_NAMES[bucket] if primary else f"{stem}_{nth + 1}.docx"
         dest = parts_dir / name
         clip_docx_keep(tpl, dest, indexes)
-        first = min(indexes)
-        entry = {"key": key, "bucket": bucket, "path": str(dest),
-                 "sections": [s for s in sections.get(bucket, [])][:len(runs)],
-                 "first_element_index": first}
-        entries.append(entry)
-        if nth == 0:                                       # 首段沿用旧键(兼容 fill 取用)
+        entries.append({"key": key, "bucket": bucket, "path": str(dest),
+                        "primary": primary,
+                        "first_element_index": min(indexes)})
+        if primary:                                        # 首段沿用旧键(fill 经 state 取用)
             template_parts[bucket] = str(dest)
-            manifest[bucket] = {"path": str(dest), "sections": sections.get(bucket, []),
-                                "first_element_index": first}
 
-    order = sorted(manifest, key=lambda b: manifest[b]["first_element_index"])
     (parts_dir / "parts.yaml").write_text(
-        yaml.safe_dump({"order": order, "parts": manifest,
-                        "entries": sorted(entries, key=lambda e: e["first_element_index"])},
+        yaml.safe_dump({"entries": sorted(entries, key=lambda e: e["first_element_index"])},
                        allow_unicode=True, sort_keys=False),
         encoding="utf-8")
     return {"template_parts": template_parts}

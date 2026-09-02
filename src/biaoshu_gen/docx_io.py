@@ -143,6 +143,13 @@ class DocxBlockRange:
     elements: list
 
 
+def body_children_count(doc_or_path: "DocumentType | Path | str") -> int:
+    """docx body 顶层子元素数(不含 sectPr)——切片规模与膨胀守卫的统一度量。"""
+    doc = doc_or_path if hasattr(doc_or_path, "element") else Document(str(doc_or_path))
+    return len([el for el in doc.element.body.iterchildren()
+                if not el.tag.endswith("}sectPr")])
+
+
 def docx_block_ranges(doc: DocumentType) -> list[DocxBlockRange]:
     """按标题把文档切成区间（assemble 分段定位/替换的基础）。"""
     ranges: list[DocxBlockRange] = []

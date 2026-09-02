@@ -12,19 +12,26 @@
 - 底稿没有对应区间时，仅把填充文档中**该区间的内容**追加尾部（不整本拼接）；
 - 填充文档连锚标题都没有时，兜底走整本去重追加。
 """
+import copy as _copy
+import logging
 from pathlib import Path
 
 from docx import Document
 from docx.oxml.ns import qn
 
 from ..docx_io import (
-    adopt_image_rels, append_elements_before_sectpr, copy_docx, docx_block_ranges,
-    iter_block_items, markdown_to_docx, replace_elements,
+    adopt_image_rels, append_elements_before_sectpr, body_children_count, copy_docx,
+    docx_block_ranges, iter_block_items, markdown_to_docx, replace_elements,
 )
 from ..state import BidState, run_dir
-from .split_template import read_parts_yaml
+from .split_template import load_entries, read_parts_yaml
+
+log = logging.getLogger(__name__)
 
 _TECH_KEYWORDS = ("技术方案", "技术部分", "技术标", "实施方案", "技术")
+# 膨胀守卫阈值(2026-08-28 实证:flash 把 3 元素章节封面扩成 441 元素整章)
+_BLOAT_RATIO = 3
+_BLOAT_MARGIN = 30
 
 
 def _find_range(ranges, keywords: tuple[str, ...]):
@@ -35,11 +42,15 @@ def _find_range(ranges, keywords: tuple[str, ...]):
     return None
 
 
-def _body_children_count(path: str | Path) -> int:
-    """docx body 顶层子元素数(装配膨胀守卫的切片基准)。"""
-    from docx import Document as _Doc
-
-    return len(list(_Doc(str(path)).element.body.iterchildren()))
+def _inject_technical_body(container: Document, body_md: str) -> bool:
+    """把技术正文注入宿主容器:找到技术锚区间则整段替换,正文标题按锚层级降级
+    (#70:锚 H2 时正文 #→H2、##→H3);找不到锚则尾部追加。返回是否命中锚。"""
+    tech = _find_range(docx_block_ranges(container), _TECH_KEYWORDS)
+    if tech is None:
+        return False
+    offset = max(tech.level - 1, 0)
+    replace_elements(tech.elements[1:], _content_elements(body_md, heading_offset=offset))
+    return True
 
 
 def _content_elements(md: str, heading_offset: int = 0) -> list:
@@ -74,8 +85,6 @@ def _append_docx_dedup(dest: Document, src: Document, existing: set,
     """兜底：整本去重追加（src 中与底稿文本相同的块跳过）。
 
     逐块先筛选再搬运,无法走内建迁移的 mover,此处手工配对 adopt(注释即契约)。"""
-    import copy as _copy
-
     if img_cache is None:
         img_cache = {}
     sect_pr = dest.element.body.sectPr
@@ -97,19 +106,16 @@ def _assemble_from_parts(state: BidState, manifest: dict, dest: Path, body_md: s
     """主路径：整模板样式壳清空 body，按 entries(run 粒度,文档原序)拼接。
 
     同桶多区间(sources 如 (四)(五) 商务段嵌在投标函与资格之间)以 run 为单位
-    取材:优先该 run 的附加填充产物,其次桶级主产物(仅首 run),否则原始 part——
-    整桶单排序键曾致大纲乱序。
+    取材:优先该 run 的附加填充产物,其次桶级主产物(仅 primary run),否则原始
+    part——整桶单排序键曾致大纲乱序。
     """
-    from .split_template import load_entries
-
     tpl = Path(state.template_docx_path)
     doc = copy_docx(tpl, dest)
     for el in list(doc.element.body.iterchildren()):
         if el.tag != qn("w:sectPr"):
             el.getparent().remove(el)
 
-    extra_all = {**state.extra_products_deviation, **state.extra_products_commercial,
-                 **state.extra_products_forms}
+    extra_all = state.extra_products or {}
     img_cache: dict = {}                              # 包级图片去重:各条目共享
     body_injected = False
     for entry in load_entries(manifest):
@@ -120,43 +126,31 @@ def _assemble_from_parts(state: BidState, manifest: dict, dest: Path, body_md: s
             if not (container and Path(container).exists()):
                 continue
             part = Document(str(container))            # 技术部分以原始 part 为容器
-            if body_injected:                          # 多个 technical run:后续原样保留
-                src = part
-            else:
-                tech = _find_range(docx_block_ranges(part), _TECH_KEYWORDS)
-                if tech is not None:
-                    # 正文标题按锚点层级降级:锚 H2 时正文 # → H2,目录层级不断裂(#70)
-                    offset = max(tech.level - 1, 0)
-                    replace_elements(tech.elements[1:],
-                                     _content_elements(body_md, heading_offset=offset))
-                else:
-                    markdown_to_docx(part, body_md)
+            if not body_injected and _inject_technical_body(part, body_md):
                 body_injected = True
-                src = part
+            src = part                                 # 多 technical run 后续原样保留
         else:
-            src_path = None
-            if key in extra_all and Path(extra_all[key]).exists():
-                src_path = extra_all[key]              # 该 run 的独立填充产物
-            elif key == bucket:
-                legacy = getattr(state, f"{bucket}_docx_path", "")
-                if legacy and Path(legacy).exists():
-                    src_path = legacy                  # 桶级主产物只挂首 run,防重复
-            if src_path and Path(src_path).exists():
+            src_doc = None
+            candidate = extra_all.get(key) if extra_all else None
+            if not candidate and entry.get("primary"):
+                candidate = getattr(state, f"{bucket}_docx_path", "")   # 桶级产物只挂首 run
+            if candidate and Path(candidate).exists():
                 # 膨胀守卫:产物元素数远超模板切片(harness 复述了其他章节内容)时弃用——
-                # 装配宁用原始 part 也不让幻觉扩写污染草稿
-                slice_n = _body_children_count(entry["path"])
-                prod_n = _body_children_count(src_path)
-                if prod_n > max(3 * slice_n, slice_n + 30):
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        "[assemble] %s 产物 %d 元素远超切片 %d,疑似复述扩写,回退原始 part",
-                        key, prod_n, slice_n)
-                    src_path = None
-            if not (src_path and Path(src_path).exists()):
-                src_path = entry["path"]               # 回退原始 part(未填/跳过桶)
-            if not (src_path and Path(src_path).exists()):
-                continue
-            src = Document(str(src_path))
+                # 装配宁用原始 part 也不让幻觉扩写污染草稿;开一次文档同时计数与取材
+                prod = Document(str(candidate))
+                slice_n = body_children_count(entry["path"])
+                prod_n = body_children_count(prod)
+                if prod_n > max(_BLOAT_RATIO * slice_n, slice_n + _BLOAT_MARGIN):
+                    log.warning("[assemble] %s 产物 %d 元素远超切片 %d,疑似复述扩写,回退原始 part",
+                                key, prod_n, slice_n)
+                else:
+                    src_doc = prod
+            if src_doc is None:
+                src_path = entry["path"]               # 回退原始 part(未填/跳过桶/被守卫拒绝)
+                if not Path(src_path).exists():
+                    continue
+                src_doc = Document(str(src_path))
+            src = src_doc
         elements = [el for el in src.element.body.iterchildren()
                     if el.tag != qn("w:sectPr")]
         append_elements_before_sectpr(doc, elements, src_doc=src, img_cache=img_cache)
@@ -174,7 +168,7 @@ def assemble_node(state: BidState) -> dict:
     body_md = Path(state.body_md_path).read_text(encoding="utf-8")
 
     manifest = read_parts_yaml(run_dir(state))
-    if manifest.get("order") and state.template_docx_path and \
+    if (manifest.get("entries") or manifest.get("order")) and state.template_docx_path and \
             Path(state.template_docx_path).exists():
         _assemble_from_parts(state, manifest, dest, body_md)
         return _finish(state, dest, out_dir, version, body_md)
@@ -189,12 +183,8 @@ def assemble_node(state: BidState) -> dict:
         if state.metadata and state.metadata.project_name:
             doc.add_heading(f"{state.metadata.project_name} 投标文件", level=0)
 
-    # 技术方案正文 -> 锚定"技术部分"区间（保留锚标题，替换区间其余内容）
-    tech = _find_range(docx_block_ranges(doc), _TECH_KEYWORDS)
-    if tech is not None:
-        offset = max(tech.level - 1, 0)                # 正文标题随锚点层级降级(#70)
-        replace_elements(tech.elements[1:], _content_elements(body_md, heading_offset=offset))
-    else:
+    # 技术方案正文 -> 锚定"技术部分"区间(命中锚按锚层级降级注入;未命中追加尾部)
+    if not _inject_technical_body(doc, body_md):
         doc.add_page_break()
         markdown_to_docx(doc, "# 技术方案\n\n" + body_md)
 
