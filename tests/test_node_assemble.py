@@ -8,21 +8,7 @@ from biaoshu_gen.state import BidState, run_dir
 
 
 def _forms_docx(path: Path) -> None:
-    """底稿候选：模板壳 + 已填的投标函（商务/技术仍是空壳）。"""
-    d = Document()
-    d.add_heading("投标函", level=1)
-    d.add_paragraph("公司：测试投标人公司")
-    d.add_heading("资格证明文件", level=1)
-    d.add_paragraph("营业执照复印件")
-    d.add_heading("商务部分", level=1)
-    d.add_paragraph("（此处附业绩与团队）")
-    d.add_heading("技术部分", level=1)
-    d.add_paragraph("（技术方案格式自定）")
-    d.save(path)
-
-
-def _commercial_docx(path: Path) -> None:
-    """整本模板副本，其中商务部分已填。"""
+    """底稿候选：模板壳 + 已填的投标函与商务内容（技术仍是空壳）。"""
     d = Document()
     d.add_heading("投标函", level=1)
     d.add_paragraph("公司：测试投标人公司")
@@ -51,11 +37,10 @@ def _state(tmp_path: Path, monkeypatch, version: int = 0, **paths) -> BidState:
     body = d / "05_body"
     body.mkdir(parents=True, exist_ok=True)
     (body / "body.md").write_text("# 1 总体思路\n\n总体思路内容。", encoding="utf-8")
-    for name in ("forms", "commercial", "deviation"):
+    for name in ("forms", "deviation"):
         p = d / "06_fill" / name / f"{name}.docx"
         p.parent.mkdir(parents=True, exist_ok=True)
-        maker = {"forms": _forms_docx, "commercial": _commercial_docx,
-                 "deviation": _deviation_docx}[name]
+        maker = {"forms": _forms_docx, "deviation": _deviation_docx}[name]
         if paths.get(name, True):
             maker(p)
     return BidState(
@@ -64,14 +49,14 @@ def _state(tmp_path: Path, monkeypatch, version: int = 0, **paths) -> BidState:
         body_md_path=str(body / "body.md"),
         forms_docx_path=str(d / "06_fill/forms/forms.docx") if paths.get("forms", True) else "",
         deviation_docx_path=str(d / "06_fill/deviation/deviation.docx") if paths.get("deviation") else "",
-        commercial_docx_path=str(d / "06_fill/commercial/commercial.docx") if paths.get("commercial") else "",
         draft_version=version,
     )
 
 
 def test_assemble_replaces_anchored_sections_in_template_order(tmp_path: Path, monkeypatch):
-    """商务/技术按锚标题区间替换（非追加）：壳不重复、顺序跟模板、正文进锚点。"""
-    state = _state(tmp_path, monkeypatch, forms=True, commercial=True, deviation=False)
+    """技术按锚标题区间替换（非追加）：壳不重复、顺序跟模板、正文进锚点；
+    商务内容随合并后的 forms 底稿直接就位。"""
+    state = _state(tmp_path, monkeypatch, forms=True, deviation=False)
     updates = asm.assemble_node(state)
     doc = Document(updates["draft_docx_path"])
     texts = [p.text for p in doc.paragraphs]
@@ -81,7 +66,7 @@ def test_assemble_replaces_anchored_sections_in_template_order(tmp_path: Path, m
         assert texts.count(h) == 1, (h, texts)
     # 填充内容在位
     assert "公司：测试投标人公司" in texts            # forms 底稿
-    assert "业绩：智慧城市监测平台合同" in texts        # commercial 商务区间（替换）
+    assert "业绩：智慧城市监测平台合同" in texts        # 商务内容随 forms 底稿就位
     # 技术部分空壳被正文替换
     assert "（技术方案格式自定）" not in texts
     assert "总体思路内容。" in texts
@@ -92,7 +77,7 @@ def test_assemble_replaces_anchored_sections_in_template_order(tmp_path: Path, m
 
 def test_assemble_appends_only_missing_deviation_range(tmp_path: Path, monkeypatch):
     """底稿无偏离表区间 -> 仅追加填充文档中的偏离表区间，不整本拼接。"""
-    state = _state(tmp_path, monkeypatch, forms=True, commercial=False, deviation=True)
+    state = _state(tmp_path, monkeypatch, forms=True, deviation=True)
     updates = asm.assemble_node(state)
     doc = Document(updates["draft_docx_path"])
     texts = [p.text for p in doc.paragraphs]
@@ -103,7 +88,7 @@ def test_assemble_appends_only_missing_deviation_range(tmp_path: Path, monkeypat
 
 
 def test_assemble_fallback_without_heading_styles(tmp_path: Path, monkeypatch):
-    """无标题样式的底稿：正文尾部追加 + commercial 兜底去重追加，不崩溃。"""
+    """无标题样式的底稿：正文尾部追加 + deviation 兜底去重追加，不崩溃。"""
     monkeypatch.chdir(tmp_path)
     d = run_dir(BidState(run_id="run-1"))
     body = d / "05_body"
@@ -118,36 +103,34 @@ def test_assemble_fallback_without_heading_styles(tmp_path: Path, monkeypatch):
     forms_p.parent.mkdir(parents=True, exist_ok=True)
     plain.save(forms_p)
 
-    comm = Document()                                 # 整本无标题 + 商务已填
-    comm.add_paragraph("封面页")
-    comm.add_paragraph("商务部分")
-    comm.add_paragraph("（此处填写）")
-    comm.add_paragraph("业绩：合同一份")
-    comm_p = d / "06_fill" / "commercial" / "commercial.docx"
-    comm_p.parent.mkdir(parents=True, exist_ok=True)
-    comm.save(comm_p)
+    dev = Document()                                  # 整本无标题 + 偏离已填
+    dev.add_paragraph("封面页")
+    dev.add_paragraph("偏离说明：全部无偏离")
+    dev_p = d / "06_fill" / "deviation" / "deviation.docx"
+    dev_p.parent.mkdir(parents=True, exist_ok=True)
+    dev.save(dev_p)
 
     state = BidState(
         run_id="run-1", body_md_path=str(body / "body.md"),
-        forms_docx_path=str(forms_p), commercial_docx_path=str(comm_p),
+        forms_docx_path=str(forms_p), deviation_docx_path=str(dev_p),
     )
     updates = asm.assemble_node(state)
     doc = Document(updates["draft_docx_path"])
     texts = [p.text for p in doc.paragraphs]
     assert "总体思路内容。" in texts                   # 正文尾部追加
-    assert "业绩：合同一份" in texts                   # commercial 兜底追加
+    assert "偏离说明：全部无偏离" in texts             # deviation 兜底追加
     assert texts.count("封面页") == 1                  # 壳文本去重
 
 
 def test_assemble_version_increments(tmp_path: Path, monkeypatch):
-    state = _state(tmp_path, monkeypatch, version=1, forms=True, commercial=False, deviation=False)
+    state = _state(tmp_path, monkeypatch, version=1, forms=True, deviation=False)
     updates = asm.assemble_node(state)
     assert Path(updates["draft_docx_path"]).name == "标书草稿_v2.docx"
     assert (run_dir(state) / "07_draft" / "latest.txt").read_text(encoding="utf-8") == "2"
 
 
 def test_assemble_concatenates_parts_in_template_order(tmp_path: Path, monkeypatch):
-    """parts.yaml 存在时:四份 part 按文档原序拼接,technical 注入 body,
+    """parts.yaml 存在时:各 part 按文档原序拼接,technical 注入 body,
     有填充产物用产物、跳过的桶用原始 part。"""
     from biaoshu_gen.nodes import split_template as st
 
@@ -181,23 +164,22 @@ def test_assemble_concatenates_parts_in_template_order(tmp_path: Path, monkeypat
         run_id="run-1", body_md_path=str(body / "body.md"),
         template_docx_path=str(tpl), template_parts=parts,
         forms_docx_path=_filled("forms", "表单已填标记"),
-        deviation_docx_path=_filled("deviation", "偏离已填标记"),
-        commercial_docx_path="",                      # commercial 跳过 -> 用原始 part
+        deviation_docx_path="",                        # deviation 跳过 -> 用原始 part
     )
     updates = asm.assemble_node(state)
     texts = [p.text for p in Document(updates["draft_docx_path"]).paragraphs if p.text.strip()]
     joined = "\n".join(texts)
-    # 顺序:前言(commercial 原始 part) < forms 已填 < technical body < deviation 已填
+    # 顺序:前言+保证金(forms part 内) < forms 已填 < technical body < deviation 原始 part
     assert joined.index("第五章 响应文件组成") < joined.index("一、磋商响应声明")
     assert joined.index("表单已填标记") < joined.index("总体思路内容")
-    assert joined.index("总体思路内容") < joined.index("偏离已填标记")
-    assert "三、保证金 模板正文。" in joined                        # 跳过桶保留模板原文
+    assert joined.index("总体思路内容") < joined.index("七、合同条款偏离表 模板正文。")
+    assert "三、保证金 模板正文。" in joined                        # forms part 保留模板原文
     assert "六、项目实施方案 模板正文。" not in joined               # 技术区间被 body 替换
     assert "总体思路内容" in joined                                  # body 已注入
 
 
 def test_assemble_migrates_images_from_parts(tmp_path: Path, monkeypatch):
-    """跨文档搬运须迁移图片关系:commercial 产物里的插图装配后 rId 须在壳包可解析。
+    """跨文档搬运须迁移图片关系:forms 产物里的插图装配后 rId 须在壳包可解析。
 
     真实事故:装配只搬 body 元素,a:blip@r:embed 仍指源文档关系表——Word 打开
     显示空白,而 inline_shapes 计数照常(只数 XML 不解析关系),具有欺骗性。
@@ -218,7 +200,7 @@ def test_assemble_migrates_images_from_parts(tmp_path: Path, monkeypatch):
     ws.mkdir(parents=True)
     tpl = ws / "标书模板.docx"
     doc = Document()
-    doc.add_paragraph("第五章 响应文件组成")               # 无标题前导段 -> commercial 桶
+    doc.add_paragraph("第五章 响应文件组成")               # 无标题前导段 -> forms 桶
     for title in ("一、磋商响应声明", "六、项目实施方案", "七、合同条款偏离表"):
         doc.add_heading(title, level=2)
         doc.add_paragraph(f"{title} 模板正文。")
@@ -227,19 +209,19 @@ def test_assemble_migrates_images_from_parts(tmp_path: Path, monkeypatch):
         BidState(run_id="run-1", tender_path=str(tpl), template_docx_path=str(tpl))
     )["template_parts"]
 
-    com = Document(parts["commercial"])
-    com.add_paragraph("资质证明：")
-    com.add_paragraph().add_run().add_picture(BytesIO(_PNG))
-    com_out = d / "06_fill" / "commercial" / "commercial.docx"
-    com_out.parent.mkdir(parents=True, exist_ok=True)
-    com.save(com_out)
+    frm = Document(parts["forms"])
+    frm.add_paragraph("资质证明：")
+    frm.add_paragraph().add_run().add_picture(BytesIO(_PNG))
+    frm_out = d / "06_fill" / "forms" / "forms.docx"
+    frm_out.parent.mkdir(parents=True, exist_ok=True)
+    frm.save(frm_out)
 
     body = d / "05_body"
     body.mkdir(parents=True)
     (body / "body.md").write_text("# 1 总体思路\n\n内容。", encoding="utf-8")
     state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
                      template_docx_path=str(tpl), template_parts=parts,
-                     commercial_docx_path=str(com_out))
+                     forms_docx_path=str(frm_out))
 
     updates = asm.assemble_node(state)
 
@@ -263,9 +245,9 @@ def test_assemble_stitches_interleaved_runs_in_document_order(tmp_path: Path, mo
     ws.mkdir(parents=True)
     tpl = ws / "标书模板.docx"
     doc = Document()
-    doc.add_paragraph("第七章 投标文件的格式")           # commercial run1
-    for title in ("投标函及报价文件", "（四）法定代表人身份证明",
-                  "资格证明文件", "六、项目实施方案"):
+    doc.add_paragraph("第七章 投标文件的格式")           # forms run1 头
+    for title in ("投标函及报价文件", "采购需求偏离表",
+                  "（四）法定代表人身份证明", "资格证明文件", "六、项目实施方案"):
         doc.add_heading(title, level=2)
         doc.add_paragraph(f"{title} 模板正文。")
     doc.save(tpl)
@@ -274,15 +256,18 @@ def test_assemble_stitches_interleaved_runs_in_document_order(tmp_path: Path, mo
     )["template_parts"]
     man = st.read_parts_yaml(d)
     keys = [e["key"] for e in man["entries"]]
-    assert "commercial_2" in keys and         [e for e in man["entries"] if e["key"] == "commercial"][0]["primary"] is True                        # (四) 为 commercial 第二区间
+    assert "forms_2" in keys and \
+        [e for e in man["entries"] if e["key"] == "forms"][0]["primary"] is True
+    # （四）+资格证明 在偏离表之后 -> forms 第二区间
 
-    # 附加段独立填充产物(带标记),主 forms 用真实填充
-    def _product(path: Path, marker: str):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        dd = Document(); dd.add_paragraph(marker); dd.save(path); return str(path)
+    # 附加段独立填充产物(原始 part + 标记),主 forms 用真实填充
+    def _product(src: str, out: Path, marker: str):
+        out.parent.mkdir(parents=True, exist_ok=True)
+        dd = Document(src); dd.add_paragraph(marker); dd.save(out); return str(out)
 
     body = d / "05_body"; body.mkdir(parents=True)
     (body / "body.md").write_text("# 1 总体\n思路内容。", encoding="utf-8")
+    forms2_src = next(e["path"] for e in man["entries"] if e["key"] == "forms_2")
     filled_forms = d / "06_fill" / "forms" / "forms.docx"
     filled_forms.parent.mkdir(parents=True, exist_ok=True)
     ff = Document(parts["forms"]); ff.add_paragraph("投标函已填"); ff.save(filled_forms)
@@ -291,21 +276,22 @@ def test_assemble_stitches_interleaved_runs_in_document_order(tmp_path: Path, mo
                      template_docx_path=str(tpl), template_parts=parts,
                      forms_docx_path=str(filled_forms),
                      extra_products={
-                         "commercial_2": _product(d / "06_fill" / "commercial_2" /
-                                                  "commercial.docx", "身份证明已填")})
+                         "forms_2": _product(forms2_src, d / "06_fill" / "forms_2" /
+                                             "forms.docx", "身份证明已填")})
     updates = asm.assemble_node(state)
     joined = "\n".join(p.text for p in Document(updates["draft_docx_path"]).paragraphs
                        if p.text.strip())
     i_chapter = joined.index("第七章")
     i_letter = joined.index("投标函已填")
-    i_mid = joined.index("身份证明已填")
+    i_dev = joined.index("采购需求偏离表 模板正文。")
     i_qual = joined.index("资格证明文件 模板正文。")
-    assert i_chapter < i_letter < i_mid < i_qual          # 顺序还原,不再整桶前置
+    i_mid = joined.index("身份证明已填")                    # 附加段产物尾部标记
+    assert i_chapter < i_letter < i_dev < i_qual < i_mid   # 顺序还原,不再整桶前置
 
 
 def test_assemble_guards_against_bloated_product(tmp_path: Path, monkeypatch):
     """膨胀守卫:桶级产物元素数远超模板切片(harness 复述扩写)时弃用产物,
-    回退原始 part——software 实测 flash 把 2 元素头切片扩成 440 元素整章。"""
+    回退原始 part——software 实测 flash 把小切片扩成数百元素整章。"""
     from biaoshu_gen.nodes import split_template as st
 
     monkeypatch.chdir(tmp_path)
@@ -314,20 +300,21 @@ def test_assemble_guards_against_bloated_product(tmp_path: Path, monkeypatch):
     ws.mkdir(parents=True)
     tpl = ws / "标书模板.docx"
     doc = Document()
-    doc.add_paragraph("第七章 投标文件的格式")          # commercial 切片:2 元素
-    for title in ("投标函及报价文件", "六、项目实施方案"):
-        doc.add_heading(title, level=2)
-        doc.add_paragraph(f"{title} 模板正文。")
+    doc.add_paragraph("第七章 投标文件的格式")           # forms 切片:3 元素(第七章+投标函)
+    doc.add_heading("投标函及报价文件", level=2)
+    doc.add_paragraph("投标函及报价文件 模板正文。")
+    doc.add_heading("六、项目实施方案", level=2)
+    doc.add_paragraph("六、项目实施方案 模板正文。")
     doc.save(tpl)
     parts = st.split_template_node(
         BidState(run_id="run-1", tender_path=str(tpl), template_docx_path=str(tpl))
     )["template_parts"]
 
-    bloated = d / "06_fill" / "commercial" / "commercial.docx"   # 产物:复述扩写
+    bloated = d / "06_fill" / "forms" / "forms.docx"      # 产物:复述扩写
     bloated.parent.mkdir(parents=True, exist_ok=True)
     bd = Document()
     bd.add_paragraph("第七章 投标文件的格式")
-    for i in range(60):                                          # 61 元素 >> 2*3+30
+    for i in range(60):                                          # 61 元素 >> 3*3+30
         bd.add_paragraph(f"复述内容{i}")
     bd.save(bloated)
 
@@ -335,7 +322,7 @@ def test_assemble_guards_against_bloated_product(tmp_path: Path, monkeypatch):
     (body / "body.md").write_text("# 1 总体\n思路内容。", encoding="utf-8")
     state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
                      template_docx_path=str(tpl), template_parts=parts,
-                     commercial_docx_path=str(bloated))
+                     forms_docx_path=str(bloated))
     updates = asm.assemble_node(state)
     texts = [p.text for p in Document(updates["draft_docx_path"]).paragraphs]
     assert not any("复述内容" in t for t in texts)               # 产物被守卫拒绝
@@ -368,7 +355,7 @@ def test_assemble_demotes_body_headings_to_anchor_level(tmp_path: Path, monkeypa
         "# 1 总体思路\n\n总体内容。\n\n## 1.1 实施要点\n\n要点内容。", encoding="utf-8")
     state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
                      template_docx_path=str(tpl), template_parts=parts,
-                     forms_docx_path="", deviation_docx_path="", commercial_docx_path="")
+                     forms_docx_path="", deviation_docx_path="")
     updates = asm.assemble_node(state)
     doc2 = Document(updates["draft_docx_path"])
     styles = {p.text.strip(): p.style.name for p in doc2.paragraphs if p.text.strip()}

@@ -43,7 +43,7 @@ def _state(tmp_path: Path, monkeypatch) -> BidState:
 
 
 def test_node_names_registry():
-    assert NODE_NAMES[0] == "parse_tender" and len(NODE_NAMES) == 13
+    assert NODE_NAMES[0] == "parse_tender" and len(NODE_NAMES) == 12
     assert DEFAULT_NODES["parse_tender"] is pt.parse_tender_node
     assert callable(DEFAULT_NODES["extract_template"])  # 未实现 -> stub
 
@@ -65,11 +65,21 @@ def test_classify_sections_keyword_routing():
     assert 1 not in r["metadata"]                       # 前言不误入
 
 
+def test_classify_sections_allows_multi_classification():
+    """一节可属多组：「项目概况」既入 metadata（名称/背景/预算）也入 requirements（需求侧）。"""
+    secs = [
+        DocxSection(1, "第一章 项目概况",
+                    "项目名称：演示项目；建设内容：1000 并发系统。"),
+    ]
+    r = pt.classify_sections(secs)
+    assert 1 in r["metadata"] and 1 in r["requirements"]   # 双组归属
+
+
 def test_parse_tender_routes_sections_by_keywords(tmp_path: Path, monkeypatch):
     state = _state(tmp_path, monkeypatch)
     captured: list[tuple[type, str]] = []
     presets: dict[type, dict] = {
-        TenderMetadata: {"project_name": "演示项目"},
+        TenderMetadata: {"project_name": "演示项目", "bid_type": "服务"},
         TenderRequirements: {"tech_requirements": ["1000 并发"]},
         ScoringStandards: {"price_rules": "最低价得 100 分"},
     }
@@ -91,6 +101,7 @@ def test_parse_tender_routes_sections_by_keywords(tmp_path: Path, monkeypatch):
     assert (d / "metadata.yaml").exists() and (d / "scoring.yaml").exists()
     assert (d / "routing.yaml").exists()               # 路由透明化
     assert updates["metadata"].project_name == "演示项目"
+    assert updates["metadata"].bid_type == "服务"       # LLM 主判直接采信
     assert updates["requirements"].tech_requirements == ["1000 并发"]
 
     # 分节路由断言：每组抽取只看到本组章节内容（关键词路由，无 LLM 分类调用）
@@ -242,6 +253,35 @@ def test_classify_sections_content_fallback_front_attachment_table():
     r = pt.classify_sections(secs)
     assert 1 in r["metadata"]
     assert 2 not in r["metadata"]
+
+
+def test_parse_tender_infers_bid_type_by_keywords(tmp_path: Path, monkeypatch):
+    """LLM 未给出 bid_type 时，全文关键词兜底判定（工程>货物>服务 特异性序）。"""
+    monkeypatch.chdir(tmp_path)
+    tender = tmp_path / "t3.docx"
+    d = Document()
+    d.add_heading("第一章 招标公告", level=1)
+    d.add_paragraph("本项目为货物类采购（服务器与存储设备），含三年维保服务。")
+    d.save(tender)
+    state = BidState(run_id="run-bt", tender_path=str(tender))
+
+    presets: dict[type, dict] = {
+        TenderMetadata: {"project_name": "设备项目"},   # 未给 bid_type
+        TenderRequirements: {"purchase_list": ["服务器"]},
+    }
+
+    def make(output_type, system_prompt, retries=2):
+        async def fn(messages, info: AgentInfo):
+            tool_name = info.output_tools[0].name if info.output_tools else "final_result"
+            out = presets.get(output_type, {})
+            return ModelResponse(parts=[ToolCallPart(tool_name=tool_name, args=json.dumps(out))])
+        return Agent(model=FunctionModel(fn), output_type=output_type,
+                     system_prompt=system_prompt, retries=retries)
+
+    monkeypatch.setattr(pt, "make_agent", make)
+    updates = pt.parse_tender_node(state)
+    assert updates["metadata"].bid_type == "货物"       # 关键词兜底（「货物类采购」命中货物，
+    # 且「维保服务」不覆盖——特异性序工程>货物>服务）
 
 
 def test_parse_groups_extract_concurrently(tmp_path: Path, monkeypatch):

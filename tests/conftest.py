@@ -34,6 +34,13 @@ def _make_fake_agent(overrides: dict, default: dict, output_type, system_prompt:
                  system_prompt=system_prompt, retries=retries)
 
 
+@pytest.fixture(autouse=True)
+def _pin_ragflow_dataset_name(monkeypatch):
+    """测试与用户 .env 解耦：dataset 名钉成固定值，断言不随本机配置漂移。"""
+    from biaoshu_gen.config import get_settings
+    monkeypatch.setattr(get_settings(), "ragflow_dataset_name", "biaoshu-products")
+
+
 @pytest.fixture
 def fake_agent_factory():
     """用法：monkeypatch.setattr(node_mod, 'make_agent', fake_agent_factory({SomeType: {...}}))"""

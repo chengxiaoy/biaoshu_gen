@@ -18,7 +18,8 @@ from .structure import rebuild_sections
 # 每组抽取的输出类型与说明（进入抽取 prompt）
 GROUPS: dict[str, tuple[type[BaseModel], str]] = {
     "metadata": (TenderMetadata,
-                 "标书元数据：项目名称/编号、项目背景、投标截止、交货日期、质保期等"),
+                 "标书元数据：项目名称/编号、标书类型（服务/货物/工程三选一，按项目性质判断）、"
+                 "项目背景、投标截止、交货日期、质保期等"),
     "requirements": (TenderRequirements,
                      "标书需求：采购清单、项目概况、技术要求（逐条）、实施要求（逐条）"),
     "invalidation": (InvalidationItems,
@@ -33,7 +34,9 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
     "metadata": ("公告", "投标邀请", "前附表", "中标通知", "投标报价", "投标有效期",
                  "交货", "质保", "合同草案",
                  # 竞争性磋商系术语（真实样本：项目名称/预算全在「第一章 磋商邀请」）
-                 "磋商邀请", "磋商公告", "截止"),
+                 "磋商邀请", "磋商公告", "截止",
+                 # 「项目概况」双归属：既含元数据（名称/背景/预算）也含需求侧信息
+                 "项目概况"),
     "requirements": ("采购需求", "采购清单", "项目概况", "技术要求", "实施要求",
                      "建设内容", "交付", "预期成果"),
     "scoring": ("评标", "评分", "资格审查", "评审"),
@@ -53,6 +56,22 @@ _CONTENT_SIGNS: dict[str, tuple[tuple[str, ...], ...]] = {
     ),
 }
 _MAX_BATCH_CHARS = 24000
+
+# 标书类型关键词兜底（LLM 未给出 bid_type 时）：按特异性 工程>货物>服务 取首个命中类
+# （工程词最不歧义；「货物及服务」类表述命中 货物，服务兜底最后）。
+_BID_TYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "工程": ("工程施工", "工程总承包", "建设工程", "工程建", "施工", "监理", "工程量清单"),
+    "货物": ("货物类", "货物采购", "设备采购", "产品采购", "硬件设备", "仪器设备"),
+    "服务": ("服务类", "服务采购", "运维服务", "软件开发", "信息化服务", "咨询服务"),
+}
+
+
+def _infer_bid_type(text: str) -> str:
+    """标书类型关键词兜底：全文扫描命中即判定（与目录路由同哲学——零 LLM 成本）。"""
+    for btype, keywords in _BID_TYPE_KEYWORDS.items():
+        if any(k in text for k in keywords):
+            return btype
+    return ""
 
 
 def classify_sections(sections: list[DocxSection]) -> dict[str, list[int]]:
@@ -168,6 +187,12 @@ def parse_tender_node(state: BidState) -> dict:
             per_group.setdefault(group, []).append(fut.result().output)
     for group, objs in per_group.items():
         results[group] = _merge(objs) if len(objs) > 1 else objs[0]
+
+    # ②.5 标书类型兜底：LLM 未给出时全文关键词判定（工程>货物>服务 特异性序）
+    if not results["metadata"].bid_type:
+        btype = _infer_bid_type("\n".join(s.content for s in sections))
+        if btype:
+            results["metadata"] = results["metadata"].model_copy(update={"bid_type": btype})
 
     # ③ 落盘（tender.md 复用已切好的 sections，不二次解析；routing.yaml 路由透明化）
     d = run_dir(state) / "01_parse"

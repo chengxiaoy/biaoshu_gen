@@ -57,11 +57,13 @@ def test_graph_topology():
     assert ("revise", "review") in edges
 
 
-def test_route_after_body_review_and_review():
+def test_route_after_body_review_and_review(monkeypatch):
+    from biaoshu_gen.config import get_settings
+    monkeypatch.setattr(get_settings(), "body_review_max_rounds", 2)   # 固定语义,不随默认漂移
     s = BidState(body_review_passed=False, body_review_rounds=1)
     assert g.route_after_body_review(s) == "body"
     s2 = BidState(body_review_passed=False, body_review_rounds=2)
-    assert g.route_after_body_review(s2) == ["fill_forms", "deviation_table", "commercial"]
+    assert g.route_after_body_review(s2) == ["fill_forms", "deviation_table"]
     s3 = BidState(review_passed=False, revision_round=0)
     assert g.route_after_review(s3) == "revise"
     s4 = BidState(review_passed=True)
@@ -70,7 +72,9 @@ def test_route_after_body_review_and_review():
     assert g.route_after_review(s5) == END
 
 
-def test_full_run_loops_converge(tmp_path: Path):
+def test_full_run_loops_converge(tmp_path: Path, monkeypatch):
+    from biaoshu_gen.config import get_settings
+    monkeypatch.setattr(get_settings(), "body_review_max_rounds", 2)   # 回环 1 次后通过的语义
     fakes = _fakes({})
     overrides = {k: v for k, v in fakes.items() if k != "_calls"}
     graph = g.build_graph(node_overrides=overrides, checkpointer=_saver(tmp_path))

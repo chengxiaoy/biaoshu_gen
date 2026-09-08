@@ -13,11 +13,10 @@ pydantic-ai = ">=1.0,<2.0"
 claude-agent-sdk = ">=0.1,<1.0"
 typer = ">=0.12,<1.0"
 python-docx = ">=1.1,<2.0"
-jieba = ">=0.42,<0.43"
-rank-bm25 = ">=0.2.2,<0.3"
 pyyaml = ">=6.0,<7.0"
 pydantic-settings = ">=2.0,<3.0"
 pypdf = "^6.16.1"
+ragflow-sdk = {version = "0.25.1", python = ">=3.12,<3.15"}
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0,<9.0"
@@ -27,6 +26,8 @@ biaoshu = "biaoshu_gen.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["e2e: 连接本地 RAGFlow 的端到端用例（默认排除，显式 pytest -m e2e 运行）"]
+addopts = "-m 'not e2e'"
 
 [build-system]
 requires = ["poetry-core"]

@@ -5,9 +5,9 @@ def test_settings_defaults():
     s = Settings(_env_file=None)
     assert s.llm_model == "deepseek-chat"
     assert s.llm_base_url == "https://api.deepseek.com"
-    assert s.body_review_max_rounds == 2
+    assert s.body_review_max_rounds == 1   # review 回环默认一轮（与 revise 对齐）
     assert s.revise_max_rounds == 1
-    assert s.word_tolerance == 0.5
+    assert s.word_tolerance == 1           # 字数校验默认放宽（±100%）
     assert str(s.data_dir) == "data"
 
 
@@ -41,6 +41,18 @@ def test_base_url_strips_completions_path():
     assert s.llm_base_url == "https://openrouter.ai/api/v1"
     s2 = Settings(_env_file=None, llm_base_url="https://api.deepseek.com")
     assert s2.llm_base_url == "https://api.deepseek.com"
+
+
+def test_llm_thinking_normalized(monkeypatch):
+    """只认 enabled/disabled（大小写不敏感），其余（含空串）归空 = 跟随 provider 默认。"""
+    monkeypatch.setenv("LLM_THINKING", "Disabled")
+    assert Settings(_env_file=None).llm_thinking == "disabled"
+    monkeypatch.setenv("LLM_THINKING", "enabled")
+    assert Settings(_env_file=None).llm_thinking == "enabled"
+    monkeypatch.setenv("LLM_THINKING", "")
+    assert Settings(_env_file=None).llm_thinking == ""
+    monkeypatch.setenv("LLM_THINKING", "auto")
+    assert Settings(_env_file=None).llm_thinking == ""
 
 
 def test_settings_reads_harness_env(monkeypatch):

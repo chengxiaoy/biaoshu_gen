@@ -1,4 +1,4 @@
-"""节点注册表：全部 13 节点已实现，get_nodes 供 build_graph 使用。"""
+"""节点注册表：全部 12 节点已实现，get_nodes 供 build_graph 使用。"""
 from collections.abc import Callable
 
 from ..state import BidState
@@ -8,7 +8,7 @@ NodeFn = Callable[[BidState], dict]
 NODE_NAMES = [
     "parse_tender", "extract_template", "split_template", "facts", "outline",
     "body", "body_review",
-    "fill_forms", "deviation_table", "commercial",
+    "fill_forms", "deviation_table",
     "assemble", "review", "revise",
 ]
 
@@ -17,11 +17,10 @@ from .extract_template import extract_template_node  # noqa: E402
 from .split_template import split_template_node      # noqa: E402
 from .facts import facts_node                        # noqa: E402
 from .outline import outline_node                    # noqa: E402
-from .body import body_node                          # noqa: E402
+from .rich_body import rich_body_node                # noqa: E402  # body 节点已由 rich_body 替换（图表生成 + 二级粒度并发）
 from .body_review import body_review_node            # noqa: E402
 from .fill_forms import fill_forms_node              # noqa: E402
 from .deviation_table import deviation_table_node    # noqa: E402
-from .commercial import commercial_node              # noqa: E402
 from .assemble import assemble_node                  # noqa: E402
 from .review import review_node                      # noqa: E402
 from .revise import revise_node                      # noqa: E402
@@ -32,11 +31,10 @@ DEFAULT_NODES: dict[str, NodeFn] = {
     "split_template": split_template_node,
     "facts": facts_node,
     "outline": outline_node,
-    "body": body_node,
+    "body": rich_body_node,
     "body_review": body_review_node,
     "fill_forms": fill_forms_node,
     "deviation_table": deviation_table_node,
-    "commercial": commercial_node,
     "assemble": assemble_node,
     "review": review_node,
     "revise": revise_node,
@@ -78,7 +76,6 @@ def soft_fill_fail(name: str, field_default: dict):
 _fill_soft = {
     "fill_forms": ({"forms_docx_path": ""}),
     "deviation_table": ({"deviation_docx_path": ""}),
-    "commercial": ({"commercial_docx_path": ""}),
 }
 for _k, _d in _fill_soft.items():
     DEFAULT_NODES[_k] = soft_fill_fail(_k, _d)(DEFAULT_NODES[_k])

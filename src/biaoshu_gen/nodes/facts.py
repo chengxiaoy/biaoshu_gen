@@ -26,5 +26,9 @@ def facts_node(state: BidState) -> dict:
         scoring=state.scoring.model_dump_json(indent=2) if state.scoring else "",
         template_md=template_md,
     )).output
+    # 货物类标书：goods_list 必有 placeholder——LLM 未填时用采购清单预置（人工可编辑）
+    if state.metadata and state.metadata.bid_type == "货物" and not result.goods_list:
+        seed = state.requirements.purchase_list if state.requirements else []
+        result = result.model_copy(update={"goods_list": list(seed)})
     to_yaml_file(result, yaml_path)
     return {"facts": result}

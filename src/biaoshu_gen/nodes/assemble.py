@@ -188,11 +188,12 @@ def assemble_node(state: BidState) -> dict:
         doc.add_page_break()
         markdown_to_docx(doc, "# 技术方案\n\n" + body_md)
 
-    # 商务部分 / 偏离表 -> 同锚区间整段替换；底稿无该区间则仅追加该区间；再兜底整本去重
+    # 偏离表 -> 同锚区间整段替换；底稿无该区间则仅追加该区间；再兜底整本去重
+    # （商务/表单内容已并入 forms.docx 底稿，不再单独替换）
     from ..fill_context import SECTION_KEYWORDS
 
     img_cache: dict = {}
-    for field, key in (("commercial_docx_path", "commercial"), ("deviation_docx_path", "deviation")):
+    for field, key in (("deviation_docx_path", "deviation"),):
         path = getattr(state, field)
         if not (path and Path(path).exists()):
             continue
@@ -217,6 +218,6 @@ def assemble_node(state: BidState) -> dict:
 def _finish(state: BidState, dest: Path, out_dir: Path, version: int, body_md: str) -> dict:
     (out_dir / "latest.txt").write_text(str(version), encoding="utf-8")
     md_path = out_dir / f"标书草稿_v{version}.md"
-    md_path.write_text(body_md + "\n\n（已并入填充产物：forms / deviation / commercial docx）\n",
+    md_path.write_text(body_md + "\n\n（已并入填充产物：forms / deviation docx）\n",
                        encoding="utf-8")
     return {"draft_docx_path": str(dest), "draft_md_path": str(md_path), "draft_version": version}

@@ -7,16 +7,43 @@ from pathlib import Path
 
 import typer
 from langgraph.checkpoint.sqlite import SqliteSaver
+from ragflow_sdk import RAGFlow
 
-from .config import runs_root
+from .config import get_settings, runs_root
 from .graph import STAGES, STAGE_ORDER, build_graph
 
 app = typer.Typer(help="软件标书智能体 POC", no_args_is_help=True)
 
-INIT_FIELDS = ("run_id", "tender_path", "kb_dir", "template_docx_path")
+INIT_FIELDS = ("run_id", "tender_path", "kb_dir", "template_docx_path", "ragflow_dataset_id")
 
 _STAGE_INDEX = {s: i for i, s in enumerate(STAGE_ORDER)}
 _NODE_STAGE = {n: i for i, s in enumerate(STAGE_ORDER) for n in STAGES[s].members}
+
+# 阶段 -> 产物（rerun 时先删：facts/outline 等节点有「文件存在即跳过」语义，
+# 不删产物则回退后节点直接短路，重跑变成空转）。revise 产物带版本号自覆盖，不删。
+_STAGE_OUTPUTS: dict[str, tuple[str, ...]] = {
+    "parse": ("01_parse",),
+    "template": ("02_template",),
+    "facts": ("03_facts.yaml",),
+    "outline": ("04_outline.yaml",),
+    "body": ("05_body",),
+    "fill": ("06_fill",),
+    "assemble": ("07_draft",),
+    "review": ("08_review",),
+    "revise": (),
+}
+
+
+def _clear_stage_outputs(run_dir: Path, stage: str) -> None:
+    """删除该阶段的产物目录/文件（rerun 前置清理，保证节点真正重新生成）。"""
+    import shutil
+
+    for name in _STAGE_OUTPUTS.get(stage, ()):
+        p = run_dir / name
+        if p.is_dir():
+            shutil.rmtree(p)
+        elif p.exists():
+            p.unlink()
 
 
 def _resolve_run_id(run_id: str | None) -> str:
@@ -101,11 +128,14 @@ def _restore_checkpoint(run_dir: Path, stage: str) -> None:
 
 
 def _drop_wal(run_dir: Path) -> None:
-    """清除可能残留的 WAL/SHM 文件，避免旧事务污染恢复后的数据库。"""
+    """清除可能残留的 WAL/SHM 文件，避免旧事务污染恢复后的数据库。
+
+    被其他进程/连接持有而删不掉时会直接抛错（响亮失败）——静默保留 WAL 会让
+    恢复后的 checkpoint 回放旧事务，产物状态错乱。
+    """
     for suffix in ("-wal", "-shm"):
         p = run_dir / f"checkpoint.sqlite{suffix}"
-        if p.exists():
-            p.unlink()
+        p.unlink(missing_ok=True)
 
 
 def _run_stage(stage: str | None, run_id_opt: str | None) -> None:
@@ -140,9 +170,31 @@ def rerun(
     rid = _resolve_run_id(run_id)
     run_dir = runs_root() / rid
     if prev is None:
-        raise typer.BadParameter("parse 是首个阶段，没有可回退的 checkpoint（如需重跑请删除 run 重新 init）")
+        # parse 是首个阶段，无前序 checkpoint：清空当前进度从头重跑
+        # （后续阶段若需重跑，仍可用各自完成时的备份 checkpoints/<stage>.sqlite）
+        import gc
+        gc.collect()                       # 释放上一轮 graph 持有的 sqlite 连接（Windows 文件锁）
+        ckpt = run_dir / "checkpoint.sqlite"
+        try:
+            for suffix in ("", "-wal", "-shm"):
+                (run_dir / f"checkpoint.sqlite{suffix}").unlink(missing_ok=True)
+        except PermissionError:
+            conn = sqlite3.connect(ckpt)   # 删不掉（仍被引用）就清空表内容，效果等同
+            with conn:
+                for table in ("writes", "checkpoints"):
+                    conn.execute(f"DROP TABLE IF EXISTS {table}")
+            conn.close()
+        typer.secho("parse 无前序 checkpoint，已清空当前进度，从头重跑 parse…",
+                    fg=typer.colors.YELLOW)
+        _clear_stage_outputs(run_dir, stage)
+        _run_stage(stage, rid)
+        return
+    import gc
+    gc.collect()       # 释放同进程上一轮 graph 持有的 sqlite 连接（Windows 文件锁）
     _restore_checkpoint(run_dir, prev)
-    typer.secho(f"已回退到 {prev} 完成时的状态，开始重跑 {stage}…", fg=typer.colors.YELLOW)
+    _clear_stage_outputs(run_dir, stage)
+    typer.secho(f"已回退到 {prev} 完成时的状态并清除 {stage} 产物，开始重跑 {stage}…",
+                fg=typer.colors.YELLOW)
     _run_stage(stage, rid)
 
 
@@ -151,19 +203,47 @@ def init(
     tender: Path = typer.Option(..., exists=True, dir_okay=False, help="招标文件 docx"),
     kb: Path = typer.Option(Path("data/company"), help="企业信息知识库目录"),
     run_id: str = typer.Option(None, help="run 标识，缺省按时间生成"),
+    skip_ragflow: bool = typer.Option(False, "--skip-ragflow",
+                                      help="跳过 RAGFlow 初始化（检索回退本地 BM25）"),
 ) -> None:
-    """创建 run 目录与 run.json。"""
+    """创建 run 目录与 run.json，并初始化产品知识库 dataset（唯一入口）。
+
+    dataset 名取 RAGFLOW_DATASET_NAME（本地开发固定一个库）；init 幂等：同名
+    文件跳过，新加的产品资料再跑一次 init 即增量上传。后续阶段命令只经
+    run.json 的 ragflow_dataset_id 连接复用，绝不重建。
+    """
     rid = run_id or datetime.now().strftime("run-%Y%m%d-%H%M%S")
     run_dir = runs_root() / rid
     run_dir.mkdir(parents=True, exist_ok=True)
     template = next(
         (p for p in sorted(tender.parent.glob("*.docx"))
          if "模板" in p.stem and p.resolve() != tender.resolve()), None)
+
+    dataset_id, dataset_name, docs = "", "", 0
+    if not skip_ragflow:
+        from .kb_v2 import KnowledgeBaseV2
+        from .ledger import ragflow_files
+        dataset_name = get_settings().ragflow_dataset_name   # 本地开发：固定库，init 幂等增量上传
+        files = ragflow_files(kb.resolve())   # 记账区（企业信息）不上传，产品资料走 RAGFlow
+        typer.echo(f"RAGFlow 初始化: {dataset_name}（上传解析 {len(files)} 个产品资料文件）…")
+        try:
+            v2 = KnowledgeBaseV2(dataset_name=dataset_name)
+            docs = v2.load(files, wait=True)
+            dataset_id = v2._dataset.id
+        except Exception as e:
+            typer.secho(f"RAGFlow 初始化失败: {e}", fg=typer.colors.RED)
+            typer.echo("可改用 --skip-ragflow 跳过（检索将回退本地 BM25）。")
+            raise typer.Exit(1)
+        typer.secho(f"RAGFlow dataset 就绪（本次上传 {docs} 个文档）", fg=typer.colors.GREEN)
+
     (run_dir / "run.json").write_text(json.dumps({
         "run_id": rid,
         "tender_path": str(tender.resolve()),
         "kb_dir": str(kb.resolve()),
         "template_docx_path": str(template.resolve()) if template else "",
+        "ragflow_dataset": dataset_name,
+        "ragflow_dataset_id": dataset_id,
+        "ragflow_docs": docs,
         "created_at": datetime.now().isoformat(),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     (runs_root() / ".latest").parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +251,36 @@ def init(
     typer.secho(f"run 已创建: {run_dir}", fg=typer.colors.GREEN)
     if template:
         typer.echo(f"自动发现响应模板: {template}")
+
+
+@app.command()
+def clean(
+    run_id: str = typer.Option(None, "--run-id"),
+    yes: bool = typer.Option(False, "--yes", help="确认删除远端 dataset"),
+) -> None:
+    """删除该 run 对应的远端 RAGFlow dataset（本地 run 目录保留）。"""
+    rid = _resolve_run_id(run_id)
+    ds_id = _load_run(rid).get("ragflow_dataset_id")
+    if not ds_id:
+        raise typer.BadParameter("该 run 未启用 RAGFlow（run.json 无 ragflow_dataset_id）")
+    if not yes:
+        raise typer.BadParameter("将删除远端 dataset（不可恢复），确认请加 --yes")
+    settings = get_settings()
+    rag = RAGFlow(api_key=settings.ragflow_api_key, base_url=settings.ragflow_base_url)
+    # 翻页取全量，防 dataset 超过一页容量时漏判"已存在"
+    datasets, page = [], 1
+    while True:
+        batch = rag.list_datasets(page=page, page_size=100)
+        datasets.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    found = [d for d in datasets if d.id == ds_id]
+    if not found:
+        typer.secho("远端 dataset 已不存在，无需清理", fg=typer.colors.YELLOW)
+        return
+    rag.delete_datasets(ids=[ds_id])
+    typer.secho(f"已删除远端 dataset: {found[0].name}", fg=typer.colors.GREEN)
 
 
 def _make_stage_command(stage: str):

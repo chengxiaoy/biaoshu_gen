@@ -1757,7 +1757,7 @@ def _install_fake_graph(tmp_path: Path, calls: list, monkeypatch) -> None:
 
 
 def _init_run(tmp_path: Path) -> None:
-    t = tmp_path / "软件招标文件.docx"
+    t = tmp_path / "服务招标文件.docx"
     Document().save(t)
     r = runner.invoke(cli.app, ["init", "--tender", str(t), "--kb", str(tmp_path / "kb")])
     assert r.exit_code == 0, r.output
@@ -3512,7 +3512,7 @@ DEEPSEEK_API_KEY=sk-你的DeepSeek密钥
 按验收标准逐条核验（设计文档 §9）：
 
 ```bash
-poetry run biaoshu init --tender data/tender/软件招标文件.docx --kb data/company
+poetry run biaoshu init --tender data/tender/服务招标文件.docx --kb data/company
 poetry run biaoshu run
 poetry run biaoshu status
 ```

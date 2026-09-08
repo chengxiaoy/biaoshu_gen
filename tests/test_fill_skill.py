@@ -4,9 +4,9 @@ from pathlib import Path
 from docx import Document
 
 from biaoshu_gen.fill_skill import (
-    dump_fill_points, fill_all_blanks, fill_blank, fill_blank_before_label,
-    fill_cell, find_para, find_table, insert_picture_after, replace_in_para,
-    run_fill_plan,
+    dump_fill_points, fill_all_blanks, fill_blank_before_label, fill_cell,
+    fill_label_blank, find_para, find_table, insert_picture_after,
+    replace_in_para, run_fill_plan,
 )
 
 # 1x1 透明 PNG（构造插图用，无需 PIL）
@@ -73,27 +73,39 @@ def test_fill_all_blanks_does_not_inject_into_slotless_para(tmp_path: Path):
     assert p.text == "日期：无"              # 原文未变，未插入 run
 
 
-def test_fill_blank_on_underlined_blank_run(tmp_path: Path):
+def test_fill_label_on_underlined_blank_run(tmp_path: Path):
     d = Document(str(_make_template(tmp_path / "t.docx")))
-    fill_blank(d, "项目名称：", "演示项目")
+    assert fill_label_blank(d, "项目名称：", "演示项目") == 1
     p = find_para(d, "项目名称：")
     assert p.text == "项目名称：演示项目"
     assert any(r.text == "演示项目" and r.underline for r in p.runs)   # 值落在线上且保留下划线
 
 
-def test_fill_blank_on_underscore_run(tmp_path: Path):
+def test_fill_label_on_underscore_run(tmp_path: Path):
     d = Document(str(_make_template(tmp_path / "t.docx")))
-    fill_blank(d, "投标人（签章）：", "测试公司")
+    assert fill_label_blank(d, "投标人（签章）：", "测试公司") == 1
     p = find_para(d, "投标人（签章）：")
     assert p.text == "投标人（签章）：测试公司＿＿"                     # 替换线内并留余线，不附加线后
 
 
-def test_fill_blank_inserts_underlined_run_when_no_blank(tmp_path: Path):
+def test_fill_label_appends_plain_value_when_no_blank(tmp_path: Path):
+    """无下划线空位（blank 并入 label 后的统一语义）：值直接跟在标签后，不再硬插下划线。"""
     d = Document(str(_make_template(tmp_path / "t.docx")))
-    fill_blank(d, "日期：", "2026-08-20")
+    assert fill_label_blank(d, "日期：", "2026-08-20") == 1
     p = find_para(d, "日期：")
-    assert "2026-08-20" in p.text
-    assert any("2026-08-20" in r.text and r.underline for r in p.runs)  # 插入的 run 自带下划线
+    assert p.text == "日期：2026-08-20"
+
+
+def test_fill_label_skips_already_filled_or_prose(tmp_path: Path):
+    """标签后已是实义文本（已填值/正文）自动跳过——同文本多段全填且不重复填。"""
+    d = Document()
+    p = d.add_paragraph("投标人名称：某某科技（公章）")            # 已填
+    p2 = d.add_paragraph()
+    p2.add_run("投标人名称：＿＿＿（公章）")                      # 待填
+    assert fill_label_blank(d, "投标人名称", "新公司") == 1       # 只填待填处
+    texts = [x.text for x in d.paragraphs]
+    assert texts[0] == "投标人名称：某某科技（公章）"              # 已填未动
+    assert "新公司" in texts[1]
 
 
 def test_replace_and_cell_and_picture(tmp_path: Path):
@@ -116,10 +128,10 @@ def test_run_fill_plan_batch_and_errors(tmp_path: Path):
     img = tmp_path / "lic.png"
     img.write_bytes(_PNG1)
     plan = [
-        {"op": "blank", "prefix": "项目名称：", "value": "演示项目"},
+        {"op": "label", "label": "项目名称：", "value": "演示项目"},
         {"op": "cell", "table_header": ["名称"], "row": 1, "col": 1, "value": "1 套"},
         {"op": "picture", "prefix": "项目名称：", "img": str(img)},
-        {"op": "blank", "prefix": "不存在的段落：", "value": "X"},      # 应报错不中断
+        {"op": "label", "label": "不存在的段落：", "value": "X"},       # 应报错不中断
     ]
     out = tmp_path / "out.docx"
     errors = run_fill_plan(str(path), str(out), plan)
@@ -402,3 +414,95 @@ def test_label_op_matches_despite_paren_width(tmp_path: Path):
     assert errors == []
     text = Document(str(tmp_path / "out.docx")).paragraphs[0].text
     assert text == "供应商名称（盖单位章）：某公司"
+
+
+def test_table_op_fills_rows_skips_null_and_grows(tmp_path: Path):
+    """table op:按行批量填,null/空串跳格保留原样,行不足自动加行;单格 cell 通道不受影响。"""
+    d = Document()
+    d.add_paragraph("货物说明一览表：")
+    t = d.add_table(rows=2, cols=4)
+    for c, h in enumerate(("序号", "名称", "金额（元）", "备注")):
+        t.cell(0, c).text = h
+    src = tmp_path / "t.docx"
+    d.save(src)
+
+    errors = run_fill_plan(str(src), str(tmp_path / "out.docx"), [
+        {"op": "table", "table_header": ["序号", "名称", "金额（元）", "备注"],
+         "rows": [["1", "AI算力基础设施", None, "服务"],          # 金额列 null 跳过(人工填)
+                  ["2", "数据底座", "", "服务"]]},                # 空串同义
+    ])
+    assert errors == []
+    d2 = Document(str(tmp_path / "out.docx"))
+    tab = d2.tables[0]
+    assert tab.cell(1, 1).text == "AI算力基础设施" and tab.cell(1, 2).text == ""
+    assert tab.cell(2, 1).text == "数据底座"
+    assert len(tab.rows) == 3                                    # 两行数据已落,未多加
+
+
+def test_table_op_rows_grow_beyond_existing(tmp_path: Path):
+    d = Document()
+    t = d.add_table(rows=1, cols=2)
+    t.cell(0, 0).text = "序号"
+    t.cell(0, 1).text = "名称"
+    src = tmp_path / "t.docx"
+    d.save(src)
+    errors = run_fill_plan(str(src), str(tmp_path / "out.docx"), [
+        {"op": "table", "table_header": ["序号", "名称"],
+         "rows": [["1", "甲"], ["2", "乙"], ["3", "丙"]]},
+    ])
+    assert errors == []
+    tab = Document(str(tmp_path / "out.docx")).tables[0]
+    assert len(tab.rows) == 4 and tab.cell(3, 1).text == "丙"     # 1 表头 + 3 数据行
+
+
+def test_replace_hits_all_prefixed_paragraphs(tmp_path: Path):
+    """replace 全命中:同前缀的模板同构段(10 段「我方参加了(项目名称)」)一条 op 全覆盖,
+    无该占位符的同前缀段落跳过。"""
+    d = Document()
+    for _ in range(3):
+        d.add_paragraph("我方参加了（项目名称）的磋商")
+    d.add_paragraph("我方参加了磋商（此段无占位符）")
+    src = tmp_path / "t.docx"
+    d.save(src)
+
+    errors = run_fill_plan(str(src), str(tmp_path / "out.docx"), [
+        {"op": "replace", "prefix": "我方参加了", "old": "（项目名称）", "new": "演示项目"},
+    ])
+    assert errors == []
+    texts = [p.text for p in Document(str(tmp_path / "out.docx")).paragraphs]
+    assert texts.count("我方参加了演示项目的磋商") == 3
+    assert texts[3] == "我方参加了磋商（此段无占位符）"            # 无占位段落未动
+
+
+def test_replace_miss_reports_when_no_para(tmp_path: Path):
+    """前缀段落不存在时报错收集(与单段版行为一致)。"""
+    d = Document()
+    d.add_paragraph("致（采购人）：")
+    src = tmp_path / "t.docx"
+    d.save(src)
+    errors = run_fill_plan(str(src), str(tmp_path / "out.docx"), [
+        {"op": "replace", "prefix": "不存在的段落", "old": "（采购人）", "new": "X"},
+    ])
+    assert len(errors) == 1 and "不存在的段落" in errors[0]
+
+
+def test_picture_ops_same_prefix_keep_declared_order(tmp_path: Path):
+    """同锚连续插图保持声明顺序(修复:每次 find_para 回原段会把第 2 张插到第 1 张前)。"""
+    d = Document()
+    d.add_paragraph("备注：以下附证明材料")
+    src = tmp_path / "t.docx"
+    d.save(src)
+    imgs = []
+    for n in ("a", "b"):
+        p = tmp_path / f"{n}.png"
+        p.write_bytes(_PNG1)
+        imgs.append(str(p))
+
+    errors = run_fill_plan(str(src), str(tmp_path / "out.docx"), [
+        {"op": "picture", "prefix": "备注：以下附证明材料", "img": imgs[0], "caption": "图A"},
+        {"op": "picture", "prefix": "备注：以下附证明材料", "img": imgs[1], "caption": "图B"},
+    ])
+    assert errors == []
+    texts = [p.text for p in Document(str(tmp_path / "out.docx")).paragraphs]
+    assert len(d2 := Document(str(tmp_path / "out.docx")).inline_shapes) == 2
+    assert texts.index("图A") < texts.index("图B")               # 声明顺序 = 落盘顺序

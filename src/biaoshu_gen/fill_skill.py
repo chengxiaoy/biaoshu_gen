@@ -1,12 +1,13 @@
-"""标书模板填写 skill：表格填写 / 下划线填空 / 插入图片 的可复用原语。
+"""标书模板填写 skill：按标签填空 / 表格填写 / 插入图片 的可复用原语。
 
 设计要点（源自 fill 阶段 harness 实战脚本的提炼）：
-- **前缀锚定**而非魔法下标：以段落文本前缀定位（如 "项目名称："），模板微调不致错位；
-- **下划线填空**：值填*在下划线上*（优先填带下划线格式的空白 run；其次替换下划线字符 run
-  并保留少量余线；再无则复制邻近格式插入带下划线的 run）——修复"值附加在下划线之后"的问题；
+- **标签锚定**而非魔法下标：以标签文本定位（如 "项目名称："，段首/段中皆可），模板微调不致错位；
+- **填空不区分有无下划线**（blank op 已并入 label）：有下划线空位时值填*在线上*
+  （带下划线格式的空白 run / 下划线字符 run 并保留余线），无下划线则值直接跟在标签后；
+  标签后已是实义文本（已填过/正文）的命中自动跳过——同文本多段全填且不重复填；
 - **图片**：WEBP 伪装 .jpg 时机械转码 PNG（不读取内容）；插图带居中与可选图注。
 
-供 fill 阶段三个 harness 节点直接 import 使用（工作区内会自动放置本文件副本）。
+供 fill 阶段节点与 harness 兜底 agent 直接 import 使用（工作区内会自动放置本文件副本）。
 """
 import copy as _copy
 import os
@@ -115,17 +116,11 @@ def _fill_blank_in_para(p: Paragraph, value: str) -> None:
     u.set(qn("w:val"), "single")
 
 
-def fill_blank(doc, prefix: str, value: str) -> Paragraph:
-    """在 prefix 段落的填空线上填 value（首个匹配段落）。"""
-    p = find_para(doc, prefix)
-    _fill_blank_in_para(p, value)
-    return p
-
-
 def fill_label_blank(doc, label: str, value: str) -> int:
-    """段内**任意位置**按标签填其后的第一个填空（含段中部，如「编号：__ 名称：__」同段），返回填写处数。
+    """段内**任意位置**按标签填其后的填空（含段中部，如「编号：__ 名称：__」同段），返回填写处数。
 
-    与 fill_all_blanks（只认段首）互补：label op 的底层原语。
+    label op 的底层原语（blank op 已并入）：有下划线空位值落线上留余线，
+    无下划线则值直接跟在标签后；标签后已是实义文本（已填过/正文）的命中自动跳过。
     标签边界护栏同预填：标签前须是段首/分隔符/括号/空白/下划线，防前缀误中。
     """
     n = 0
@@ -151,12 +146,12 @@ def fill_label_blank(doc, label: str, value: str) -> int:
 
 
 def _fill_blank_after(p: Paragraph, q: int, value: str) -> bool:
-    """在段落第 q 个字符处起填空：跳过边界符（冒号/括号/空白）后须是下划线段或下划线空白 run。
+    """在段落第 q 个字符处起填空：跳过边界符（冒号/括号/空白）后填 value。
 
-    真实模板两种形态曾致漏填（run 游走须感知格式，不能纯按字符跳）：
-    - 填空位本身是带下划线格式的纯空格 run——跳过循环不得越过它，遇之就地填值；
-    - 下划线字符段后同一 run 还有文字（「小写：___ 大写：___」整行一个 run）——
-      按正则切出纯下划线 span 填入，不要求延伸到 run 尾。
+    落位不区分有无下划线（blank op 并入 label 后的统一语义）：
+    - 下划线空位（字符段/段中 span/带下划线的纯空白 run）：值落在线上并保留余线；
+    - 无下划线（标签后直接空到段末）：值直接接在段末，复制邻近 run 格式；
+    - 标签后已是实义文本（已填过/正文/下一个标签）：不填返回 False，调用方跳下一处。
     """
     spans = _para_spans(p)
     total = spans[-1][1] if spans else 0
@@ -176,6 +171,12 @@ def _fill_blank_after(p: Paragraph, q: int, value: str) -> bool:
             return True
         q += 1
 
+    if q >= total:                              # 标签(+边界符)即段末:值直接跟在段末
+        new_r = p.add_run(value)
+        last = next((r for r in reversed(p.runs) if (r.text or "").strip()), None)
+        if last is not None and last._element.rPr is not None:
+            new_r._element.insert(0, _copy.deepcopy(last._element.rPr))
+        return True
     hit = _run_at(q)
     if hit is None:
         return False
@@ -186,15 +187,15 @@ def _fill_blank_after(p: Paragraph, q: int, value: str) -> bool:
     if m:
         r.text = t[:off] + value + _KEEP_TAIL + t[off + m.end():]
         return True
-    if not t and _is_underlined(r) and q == s:  # 空 run 空位
+    if not t and q == s:                        # 空 run 空位
         r.text = value
         return True
-    return False
+    return False                                # 实义文本:已填过/正文,跳过
 
 
 def fill_blank_before_label(doc, label: str, value: str) -> int:
     """填「空位在标签前」形态：__(标签)——下划线空位 run 后紧跟括号注记，
-    且括号内容**恰为** label 单一标签（commercial 部分的主要文体，如
+    且括号内容**恰为** label 单一标签（商务部分的主要文体，如
     「我系参加__（项目名称），采购计划编号__」）。
 
     多标签并列（如「（项目名称、政府采购编号、采购代理编号）」）归属不明，不填；
@@ -237,33 +238,37 @@ def fill_all_blanks(doc, prefix: str, value: str) -> int:
     return n
 
 
-def replace_in_para(doc, prefix: str, old: str, new: str) -> Paragraph:
-    """段内文本替换：只重写命中区间的 run,同段其余 run（下划线填空位等）保持不动。
+def replace_in_para(doc, prefix: str, old: str, new: str) -> list[Paragraph]:
+    """段内文本替换：命中**全部**以 prefix 开头的段落（模板同构段一次全覆盖，
+    与 label 的填全部命中语义一致），返回命中段落列表。
 
+    每段内只重写命中区间的 run，同段其余 run（下划线填空位等）保持不动。
     old 字面找不到时按全半角标点归一化重试（LLM 常把模板半角括号写成全角；
-    映射为一一对应单字符,归一化串下标可直接映射回原文）。全部命中从右往左
+    映射为一一对应单字符,归一化串下标可直接映射回原文）。段内全部命中从右往左
     依次改写,避免下标位移;spans 只需构建一次——右侧改写不影响左侧命中的区间。
     """
-    p = find_para(doc, prefix)
-    full = "".join(r.text for r in p.runs)
-    matches = _find_all(full, old) \
-        or _find_all(full.translate(_WIDTH_NORM), old.translate(_WIDTH_NORM))
-    if not matches:
-        raise RuntimeError(f"{prefix!r} 段落中未找到 {old!r}：{full[:60]!r}")
-
-    spans = _para_spans(p)
-    for pos, end in reversed(matches):
-        hit = [(s, e, r) for s, e, r in spans if s < end and e > pos
-               or (s == e and pos <= s < end)]             # 空 run 视为在 pos 处
-        if not hit:
-            continue
-        s_first, _, r_first = hit[0]
-        s_last, _, r_last = hit[-1]
-        r_first.text = (r_first.text or "")[:pos - s_first] + new \
-            + (r_last.text or "")[end - s_last:]
-        for _, _, r in hit[1:]:
-            r.text = ""
-    return p
+    hits = [p for p in doc.paragraphs if p.text.strip().startswith(prefix)]
+    if not hits:
+        raise RuntimeError(f"找不到以 {prefix!r} 开头的段落；请核对模板文本")
+    for p in hits:
+        full = "".join(r.text for r in p.runs)
+        matches = _find_all(full, old) \
+            or _find_all(full.translate(_WIDTH_NORM), old.translate(_WIDTH_NORM))
+        if not matches:
+            continue                      # 同前缀但无此占位符的段落跳过,其余段落继续
+        spans = _para_spans(p)
+        for pos, end in reversed(matches):
+            hit = [(s, e, r) for s, e, r in spans if s < end and e > pos
+                   or (s == e and pos <= s < end)]         # 空 run 视为在 pos 处
+            if not hit:
+                continue
+            s_first, _, r_first = hit[0]
+            s_last, _, r_last = hit[-1]
+            r_first.text = (r_first.text or "")[:pos - s_first] + new \
+                + (r_last.text or "")[end - s_last:]
+            for _, _, r in hit[1:]:
+                r.text = ""
+    return hits
 
 
 def fill_cell(doc, table_idx: int, row: int, col: int, text: str):
@@ -304,10 +309,9 @@ def _new_para_after(p: Paragraph) -> Paragraph:
     return np_
 
 
-def insert_picture_after(doc, prefix: str, img: str, width_inch: float = 5.6,
-                         caption: str | None = None) -> Paragraph:
-    """在 prefix 段落之后插入居中图片（可选图注），返回可继续链式插入的锚段。"""
-    p = find_para(doc, prefix)
+def _insert_picture_after_para(p: Paragraph, img: str, width_inch: float = 5.6,
+                               caption: str | None = None) -> Paragraph:
+    """在指定段落之后插入居中图片（可选图注），返回链式续插锚段（图注或图片段）。"""
     np_ = _new_para_after(p)
     np_.alignment = 1                       # center
     r = np_.add_run()
@@ -320,6 +324,12 @@ def insert_picture_after(doc, prefix: str, img: str, width_inch: float = 5.6,
         cp.alignment = 1
         last = cp
     return last
+
+
+def insert_picture_after(doc, prefix: str, img: str, width_inch: float = 5.6,
+                         caption: str | None = None) -> Paragraph:
+    """在 prefix 段落之后插入居中图片（可选图注），返回可继续链式插入的锚段。"""
+    return _insert_picture_after_para(find_para(doc, prefix), img, width_inch, caption)
 
 
 # ---------------- 声明式填空清单（一次执行、批量报错，压缩 harness 轮次） ----------------
@@ -344,12 +354,35 @@ def find_table(doc, *header_keywords: str) -> int:
     raise RuntimeError(f"找不到表头含 {header_keywords} 的表格")
 
 
+_PAREN_PLACEHOLDER = re.compile(r"[（(][^（）()]{1,20}[）)]")
+
+
+def _is_fill_candidate(p) -> bool:
+    """段落是否为可填点候选：空位段 / 括号占位段 / 短标签段（空白折叠后 ≤30 字含冒号）。
+
+    地图只列候选——纯正文段 LLM 用不到，省输入 token 与注意力。
+    短标签段覆盖 blank 并入 label 后的「无下划线直填」场景（如「日期：」「投标人名称：」）。
+    """
+    t = p.text.strip()
+    if not t:
+        return False
+    if _has_fill_slot(p):
+        return True
+    if _PAREN_PLACEHOLDER.search(t):
+        return True
+    compact = _norm_ws(t)
+    return len(compact) <= 30 and "：" in compact
+
+
 def dump_fill_points(doc) -> str:
-    """一次性输出模板全部可填点地图：段落（下标/文本/是否含填空线）+ 表格（下标/表头）。"""
+    """一次性输出模板可填点地图：段落只列可填点候选（下标/文本/是否含填空线）+ 表格表头。
+
+    纯正文段省略（_is_fill_candidate 判定），空段落同样省略。
+    """
     lines = ["== 段落 =="]
     for i, p in enumerate(doc.paragraphs):
         t = p.text.strip()
-        if not t:
+        if not t or not _is_fill_candidate(p):
             continue
         lines.append(f"[{i}]{'(线)' if _has_fill_slot(p) else ''} {t[:50]}")
     lines.append("== 表格 ==")
@@ -364,35 +397,50 @@ def run_fill_plan(template: str, output: str, plan: list[dict]) -> list[str]:
     """按填空清单一次性执行全部操作；单条失败不中断，返回错误清单供批量修正。
 
     plan 条目（op 必填）：
-      {"op":"blank","prefix":"项目名称：","value":"X"}                 # 下划线填空
-      {"op":"label","label":"项目名称：","value":"X"}                  # 按标签填空(段中部亦可,填全部命中)
-      {"op":"replace","prefix":"致：","old":"（采购人）","new":"X"}      # 段内替换
-      {"op":"cell","table":0,"row":1,"col":2,"value":"X"}              # 按下标填格
-      {"op":"cell","table_header":["序号","名称"],"row":1,"col":1,...} # 按表头定位填格
+      {"op":"label","label":"项目名称：","value":"X"}                  # 按标签填空(段首/段中皆可,填全部命中;有无下划线均可)
+      {"op":"replace","prefix":"致：","old":"（采购人）","new":"X"}      # 段内替换(全部命中同前缀段落)
+      {"op":"table","table_header":["序号","名称"],"rows":[["1","X"],...]} # 按行批量填表(null 跳过该格,行不足自动加行)
+      {"op":"cell","table":0,"row":1,"col":2,"value":"X"}              # 按下标填单格
+      {"op":"cell","table_header":["序号","名称"],"row":1,"col":1,...} # 按表头定位填单格
       {"op":"picture","prefix":"备注：","img":"C:/...jpg","width":4.8,"caption":"附：X"}
-      {"op":"append","prefix":"投标人名称：","value":"X"}               # 段末追加（无填空线时）
+      {"op":"append","prefix":"投标人名称：","value":"X"}               # 段末追加（无标签锚的补文字）
     """
     errors: list[str] = []
     doc = Document(template)
+    # 同 prefix 连续 picture 的链式锚:每次 find_para 都回到原段会让第 2 张图插到第 1 张
+    # 前面(真实 run 三证照图反序实证)——接着上一张插入位置续插,保持声明顺序。
+    last_pic: tuple[str, Paragraph] | None = None
     for i, op in enumerate(plan):
         try:
             kind = op["op"]
-            if kind == "blank":
-                fill_blank(doc, op["prefix"], op["value"])
-            elif kind == "label":
+            if kind == "label":
                 n = fill_label_blank(doc, op["label"], op["value"])
                 if n == 0:
                     raise RuntimeError("未命中任何带该标签的填空；请核对模板文本")
             elif kind == "replace":
                 replace_in_para(doc, op["prefix"], op["old"], op["new"])
+            elif kind == "table":
+                t = op.get("table")
+                if t is None:
+                    t = find_table(doc, *op["table_header"])
+                start = int(op.get("start_row", 1))
+                for ri, vals in enumerate(op["rows"]):
+                    for ci, v in enumerate(vals):
+                        if v is None or str(v).strip() == "":
+                            continue          # null/空串=跳过该格(保留原样)
+                        fill_cell(doc, int(t), start + ri, ci, str(v))
             elif kind == "cell":
                 t = op.get("table")
                 if t is None:
                     t = find_table(doc, *op["table_header"])
                 fill_cell(doc, int(t), int(op["row"]), int(op["col"]), op["value"])
             elif kind == "picture":
-                insert_picture_after(doc, op["prefix"], op["img"],
-                                     float(op.get("width", 5.6)), op.get("caption"))
+                prefix = op["prefix"]
+                anchor = (last_pic[1] if last_pic and last_pic[0] == prefix
+                          else find_para(doc, prefix))
+                last_pic = (prefix, _insert_picture_after_para(
+                    anchor, op["img"], float(op.get("width") or 0) or 5.6,
+                    op.get("caption")))
             elif kind == "append":
                 find_para(doc, op["prefix"]).add_run(op["value"])
             else:

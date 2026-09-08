@@ -9,5 +9,5 @@ def test_all_nodes_registered_no_stubs():
 
 
 def test_nodes_cover_all_twelve():
-    assert len(NODE_NAMES) == 13
+    assert len(NODE_NAMES) == 12
     assert set(NODE_NAMES) == set(DEFAULT_NODES.keys())

@@ -225,7 +225,7 @@ def prepare_agent_workspace(state, subdir: str,
     基础输入 tender.md + invalidation.yaml + 可选 标书模板.docx（默认整模板，
     可经 template_src 指定为四分拆 part），附加调用方输入，生成 kb.md，
     并投放 fill_skill.py（表格填写/下划线填空/插图原语，供 harness 直接 import）。"""
-    from .kb import KnowledgeBase
+    from .ledger import build
     from .state import run_dir
 
     parse = run_dir(state) / "01_parse"
@@ -239,7 +239,7 @@ def prepare_agent_workspace(state, subdir: str,
     skill_src = Path(__file__).with_name("fill_skill.py")
     if skill_src.exists():
         shutil.copyfile(skill_src, ws / "fill_skill.py")   # 总是同步最新 skill
-    KnowledgeBase.load(Path(state.kb_dir)).dump_summary(ws / "kb.md")
+    build(Path(state.kb_dir)).dump(ws / "kb.md")
     return ws
 
 

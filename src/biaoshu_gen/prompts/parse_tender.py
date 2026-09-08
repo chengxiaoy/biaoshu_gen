@@ -3,7 +3,7 @@
 目录路由为代码侧关键词匹配（见 nodes/parse_tender.classify_sections），无 LLM 分类调用。
 """
 
-SYSTEM_EXTRACT = "你是资深软件投标分析师。只依据给出的章节内容抽取信息，原文没有的留空/空列表，不得臆造。"
+SYSTEM_EXTRACT = "你是资深投标分析师。只依据给出的章节内容抽取信息，原文没有的留空/空列表，不得臆造。"
 
 EXTRACT_TEMPLATE = """从以下招标文件章节内容中抽取「{group_desc}」：
 

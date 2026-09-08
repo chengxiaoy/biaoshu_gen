@@ -17,6 +17,7 @@ class BidState(BaseModel):
     tender_path: str = ""
     kb_dir: str = ""
     template_docx_path: str = ""      # 招标文件同目录下发现的 *模板*.docx（可为空）
+    ragflow_dataset_id: str = ""      # init 时创建的 RAGFlow dataset（空=未启用 v2，检索回退本地）
 
     # 01_parse
     metadata: TenderMetadata | None = None
@@ -38,8 +39,7 @@ class BidState(BaseModel):
     # 06_fill
     forms_docx_path: str = ""
     deviation_docx_path: str = ""
-    commercial_docx_path: str = ""
-    template_parts: dict[str, str] = {}    # 模板四分拆:bucket -> part docx 路径(各桶首段)
+    template_parts: dict[str, str] = {}    # 模板三分拆:bucket -> part docx 路径(各桶首段)
     # 同桶多区间时附加段的填充产物 run_key -> docx 路径。
     # Annotated reducer:三个 fill 节点在并行 superstep 各写己键,or 合并不互相覆盖
     extra_products: Annotated[dict[str, str], operator.or_] = {}

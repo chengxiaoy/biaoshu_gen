@@ -1,35 +1,32 @@
 from pathlib import Path
 
 from biaoshu_gen.harness import prepare_agent_workspace
-from biaoshu_gen.kb import KnowledgeBase
-from biaoshu_gen.nodes import commercial as com
+from biaoshu_gen.ledger import build
 from biaoshu_gen.nodes import deviation_table as dev
 from biaoshu_gen.nodes import fill_forms as ff
 from biaoshu_gen.state import BidState, run_dir
 
 
 def _fake_run(captured):
+    """假 harness：只记录调用，不动产物（程序化路径已生成真实 docx）。"""
     def fake(task):
         captured.append((task.cwd, task.prompt, task.expected_outputs))
-        for p in task.expected_outputs:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(b"fake-docx")
         return task.expected_outputs
     return fake
 
 
-def _patch_fill_harness(monkeypatch, captured, mod=None):
-    """fill 节点经 fill_context.run_fill_node 调用 harness，故 patch 该模块。"""
-    from biaoshu_gen import fill_context
-    monkeypatch.setattr(fill_context, "run_harness_task", _fake_run(captured))
+def _patch_fill_harness(monkeypatch, captured):
+    """fill_forms 的 harness 兜底经 ff 模块调用 run_harness_task，故 patch 该模块。"""
+    monkeypatch.setattr(ff, "run_harness_task", _fake_run(captured))
 
 
 def _base_state(tmp_path: Path, monkeypatch) -> BidState:
     monkeypatch.chdir(tmp_path)
     state = BidState(run_id="run-1", kb_dir=str(tmp_path / "kb"))
-    (tmp_path / "kb").mkdir(exist_ok=True)
-    (tmp_path / "kb" / "简介.md").write_text("公司具备 CMMI5。", encoding="utf-8")
-    (tmp_path / "kb" / "营业执照.jpg").write_bytes(b"\xff\xd8img")
+    ent = tmp_path / "kb" / "1、企业信息"
+    ent.mkdir(parents=True, exist_ok=True)
+    (ent / "简介.md").write_text("公司具备 CMMI5。", encoding="utf-8")
+    (ent / "营业执照.jpg").write_bytes(b"\xff\xd8img")
     parse = run_dir(state) / "01_parse"
     parse.mkdir(parents=True)
     (parse / "tender.md").write_text("# 招标公告", encoding="utf-8")
@@ -42,13 +39,16 @@ def _base_state(tmp_path: Path, monkeypatch) -> BidState:
 
 
 def test_dump_summary_contains_text_and_images(tmp_path: Path):
+    from biaoshu_gen.ledger import build
+
     kb_dir = tmp_path / "kb"
-    kb_dir.mkdir()
-    (kb_dir / "a.md").write_text("具备 ISO27001。", encoding="utf-8")
-    (kb_dir / "lic.jpg").write_bytes(b"\xff\xd8x")
-    out = KnowledgeBase.load(kb_dir).dump_summary(tmp_path / "kb.md")
+    ent = kb_dir / "1、企业信息"
+    ent.mkdir(parents=True)
+    (ent / "a.md").write_text("具备 ISO27001。", encoding="utf-8")
+    (ent / "lic.jpg").write_bytes(b"\xff\xd8x")
+    out = build(kb_dir).dump(tmp_path / "kb.md")
     text = out.read_text(encoding="utf-8")
-    assert "ISO27001" in text and str((kb_dir / "lic.jpg").resolve()) in text
+    assert "ISO27001" in text and str((ent / "lic.jpg").resolve()) in text
 
 
 def _with_template(tmp_path: Path, monkeypatch, text: str = "偏离表") -> BidState:
@@ -104,7 +104,7 @@ def _forms_state(tmp_path: Path, monkeypatch) -> BidState:
 
 
 _PLAN = {"plan": [
-    {"op": "blank", "prefix": "项目名称：", "value": "演示项目"},
+    {"op": "label", "label": "项目名称：", "value": "演示项目"},
     {"op": "cell", "table_header": ["序号", "名称"], "row": 1, "col": 1, "value": "工业机器人"},
 ]}
 
@@ -127,67 +127,73 @@ def test_fill_forms_executes_llm_plan(tmp_path: Path, monkeypatch):
     assert len(make.calls) == 1                                    # 无报错不回炉
 
 
-def test_fill_forms_keeps_product_on_execution_errors(tmp_path, monkeypatch):
-    """_FIX_ROUNDS=0(用户设定,勿改回):执行报错不回炉、单次即止。用户裁决(2026-08-27)
-    个别 op 报错不弃产物——记 error.log 供人工补,产物照常返回。"""
+def test_fill_forms_falls_back_to_harness_on_execution_errors(tmp_path, monkeypatch):
+    """执行报错 -> 不回炉重出 plan,转 harness 兜底:prompt 带报错清单与当前产物地图;
+    兜底接管后不再记 error.log,产物照常返回(feedback #78 先程序化再 harness 兜底)。"""
     state = _forms_state(tmp_path, monkeypatch)
-    bad = {"plan": [{"op": "blank", "prefix": "不存在的段落：", "value": "x"},
-                    {"op": "blank", "prefix": "项目名称：", "value": "演示项目"}]}
+    bad = {"plan": [{"op": "label", "label": "不存在的段落：", "value": "x"},
+                    {"op": "label", "label": "项目名称：", "value": "演示项目"}]}
     make = _fake_fill_make([bad])
     monkeypatch.setattr(ff, "make_agent", make)
+    captured = []
+    _patch_fill_harness(monkeypatch, captured)
 
     updates = ff.fill_forms_node(state)
-    assert len(make.calls) == 1                                    # 单次,无修正轮
+    assert len(make.calls) == 1                                    # plan 通道单次,无修正轮
+    assert len(captured) == 1                                      # 兜底恰好发起一次
+    prompt = captured[0][1]
+    assert "不存在的段落" in prompt                                # 报错清单进兜底 prompt
+    assert "模板可填点地图" in prompt and "项目名称" in prompt       # 地图基于当前产物
     assert updates["forms_docx_path"] and Path(updates["forms_docx_path"]).exists()
-    errlog = run_dir(state) / "06_fill" / "fill_forms.error.log"
-    assert "不存在的段落" in errlog.read_text(encoding="utf-8")   # 报错留痕
+    assert not (run_dir(state) / "06_fill" / "fill_forms.error.log").exists()
     from docx import Document as _D
     assert any("演示项目" in p.text for p in _D(updates["forms_docx_path"]).paragraphs)
 
 
-def test_commercial_only_harness_node_isolated_workspaces(tmp_path: Path, monkeypatch):
-    """harness 家族只剩 commercial;forms/deviation 已非 harness 化(各有独立测试)。"""
-    state = _with_template(tmp_path, monkeypatch, text="商务部分\n偏离表")
+def test_fill_forms_falls_back_to_harness_on_plan_failure(tmp_path, monkeypatch):
+    """plan 两次校验均失败 -> 程序化通道放弃,兜底做全量填写(prompt 无报错清单,
+    明示全量填写与范围);产物保留(预填底稿 + 兜底补填)。
+
+    失败取「空 plan」(过 Pydantic、被节点 _validate 拒)而非非法 op——FillOp.op
+    收紧为 Literal 后,非法值在 pydantic-ai 输出校验层抛 UnexpectedModelBehavior,
+    会被 models.run_sync 当瞬态错误指数退避 70s,单测会假死。"""
+    state = _forms_state(tmp_path, monkeypatch)
+    bad = {"plan": []}
+    make = _fake_fill_make([bad, bad])                             # 两次都非法
+    monkeypatch.setattr(ff, "make_agent", make)
     captured = []
     _patch_fill_harness(monkeypatch, captured)
-    u3 = com.commercial_node(state)
 
-    assert u3["commercial_docx_path"].endswith("commercial.docx")
-    assert len({c[0] for c in captured}) == 1
-    ws = run_dir(state) / "06_fill" / "commercial"
-    assert (ws / "tender.md").exists() and (ws / "kb.md").exists()
-    assert "CMMI5" in (ws / "kb.md").read_text(encoding="utf-8")
-    assert (ws / "scoring.yaml").exists()
+    updates = ff.fill_forms_node(state)
+    assert len(make.calls) == 2                                    # 校验重试一次后放弃
+    assert len(captured) == 1
+    assert "全量" in captured[0][1]
+    assert updates["forms_docx_path"]
+
+
+def test_fill_forms_fallback_failure_keeps_product(tmp_path, monkeypatch):
+    """兜底也失败(如 HARNESS_* 未配置):不弃产物,记 error.log 供人工补(feedback:
+    程序化成果保留),产物路径照常返回。"""
+    state = _forms_state(tmp_path, monkeypatch)
+    bad = {"plan": [{"op": "label", "label": "不存在的段落：", "value": "x"}]}
+    make = _fake_fill_make([bad])
+    monkeypatch.setattr(ff, "make_agent", make)
+
+    def boom(task):
+        raise RuntimeError("HARNESS_API_KEY 未配置")
+    monkeypatch.setattr(ff, "run_harness_task", boom)
+
+    updates = ff.fill_forms_node(state)
+    assert updates["forms_docx_path"] and Path(updates["forms_docx_path"]).exists()
+    errlog = run_dir(state) / "06_fill" / "fill_forms.error.log"
+    assert "兜底失败" in errlog.read_text(encoding="utf-8")
+    assert "不存在的段落" in errlog.read_text(encoding="utf-8")   # 报错 op 留痕
 
 
 def test_deviation_skipped_without_template(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     state = _base_state(tmp_path, monkeypatch)
     assert dev.deviation_table_node(state) == {"deviation_docx_path": ""}
-
-
-def test_commercial_skipped_without_template(tmp_path: Path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    state = _base_state(tmp_path, monkeypatch)
-    assert com.commercial_node(state) == {"commercial_docx_path": ""}
-
-
-def test_commercial_skipped_when_template_no_commercial(tmp_path: Path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    state = _with_template(tmp_path, monkeypatch, text="偏离表")
-    assert com.commercial_node(state) == {"commercial_docx_path": ""}
-
-
-def test_commercial_fills_template_with_commercial(tmp_path: Path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    state = _with_template(tmp_path, monkeypatch, text="商务部分\n业绩证明文件")
-    captured = []
-    _patch_fill_harness(monkeypatch, captured)
-    updates = com.commercial_node(state)
-    assert updates["commercial_docx_path"].endswith("commercial.docx")
-    assert len(captured) == 1
-    assert "商务部分" in captured[0][1]                  # prompt 强调按模板商务部分填写
-    assert "不得删减" not in captured[0][1] or "标书模板.docx" in captured[0][1]
 
 
 def test_prepare_agent_workspace_base_inputs(tmp_path: Path, monkeypatch):
@@ -204,23 +210,18 @@ def test_prepare_agent_workspace_base_inputs(tmp_path: Path, monkeypatch):
 
 
 def test_fill_prompts_preinject_context(tmp_path: Path, monkeypatch):
-    """模板地图/facts/图片路径预注入 prompt，harness 无需读文件探查。"""
-    monkeypatch.chdir(tmp_path)
-    from docx import Document
-    state = _base_state(tmp_path, monkeypatch)
-    tpl = tmp_path / "标书模板.docx"
-    d = Document()
-    d.add_paragraph("项目名称：＿＿＿")
-    d.add_paragraph("商务部分")
-    d.save(tpl)
-    state = state.model_copy(update={"template_docx_path": str(tpl)})
-
+    """模板地图/facts/企业信息摘要/图片路径预注入 prompt，harness 兜底无需读文件探查。"""
+    state = _forms_state(tmp_path, monkeypatch)
+    bad = {"plan": [{"op": "label", "label": "不存在的段落：", "value": "x"}]}
+    monkeypatch.setattr(ff, "make_agent", _fake_fill_make([bad]))
     captured = []
     _patch_fill_harness(monkeypatch, captured)
-    com.commercial_node(state)
+
+    ff.fill_forms_node(state)
     prompt = captured[0][1]
     assert "模板可填点地图" in prompt and "项目名称" in prompt   # 地图已注入
     assert "facts.yaml 全文" in prompt and "90 天" in prompt    # facts 已注入
+    assert "企业信息摘要" in prompt and "CMMI5" in prompt       # 企业信息摘要已注入
     assert "营业执照.jpg" in prompt                              # 图片绝对路径已注入
 
 
@@ -273,7 +274,7 @@ def test_fill_forms_uses_part_when_present(tmp_path: Path, monkeypatch):
     pd.add_paragraph("投标函（格式）")
     pd.save(part)
     state = state.model_copy(update={"template_parts": {"forms": str(part)}})
-    plan = {"plan": [{"op": "blank", "prefix": "项目名称：", "value": "演示项目"}]}
+    plan = {"plan": [{"op": "label", "label": "项目名称：", "value": "演示项目"}]}
     make = _fake_fill_make([plan])
     monkeypatch.setattr(ff, "make_agent", make)
 
@@ -334,20 +335,27 @@ def test_fill_forms_skips_label_ops_covered_by_prefill(tmp_path, monkeypatch):
     assert any("演示项目" in t and "模型自拟名称" not in t for t in texts)  # 预填值生效,op 被跳过
 
 
-def test_commercial_tiny_part_skips_fill(tmp_path, monkeypatch):
-    """切片过小(<5 元素,如章节封面)无可填内容:直接跳过填充,不烧 LLM——
-    flash 曾把 3 元素切片从 tender.md 扩写成 441 元素整章。"""
+def test_fill_forms_drops_manual_placeholder_ops(tmp_path: Path, monkeypatch):
+    """「〔待人工填写〕/〔待补〕」占位 op 被执行层丢弃(空位留给人工),正常 op 照常执行;
+    prompt 已约定不发,此处兜底防模型不听话时污染产物。"""
     from docx import Document
 
-    state = _with_template(tmp_path, monkeypatch, text="商务部分\n业绩证明文件")
-    tiny = tmp_path / "tiny.docx"
-    d = Document()
-    d.add_paragraph("第七章 投标文件的格式")
-    d.save(tiny)
-    state = state.model_copy(update={"template_parts": {"commercial": str(tiny)}})
-    captured = []
-    _patch_fill_harness(monkeypatch, captured)
+    state = _forms_state(tmp_path, monkeypatch)
+    plan = {"plan": [
+        {"op": "label", "label": "项目名称：", "value": "演示项目"},          # 正常 op
+        {"op": "label", "label": "投标报价：", "value": "〔待人工填写〕"},     # 占位:丢弃
+        {"op": "cell", "table_header": ["序号", "名称"], "row": 1, "col": 1,
+         "value": "〔待补〕"},                                              # 表格占位:丢弃
+        {"op": "cell", "table_header": ["序号", "名称"], "row": 1, "col": 0,
+         "value": "工业机器人"},
+    ]}
+    make = _fake_fill_make([plan])
+    monkeypatch.setattr(ff, "make_agent", make)
 
-    updates = com.commercial_node(state)
-    assert updates["commercial_docx_path"] == ""       # 跳过,产物置空
-    assert captured == []                              # 未发起任何 harness 调用
+    updates = ff.fill_forms_node(state)
+    doc = Document(updates["forms_docx_path"])
+    texts = [p.text for p in doc.paragraphs]
+    assert any("演示项目" in t for t in texts)                            # 正常 op 已执行
+    assert not any("待人工填写" in t for t in texts)
+    all_cells = [c.text for t in doc.tables for r in t.rows for c in r.cells]
+    assert "待补" not in "".join(all_cells) and "工业机器人" in all_cells   # 占位格未写,正常格已写

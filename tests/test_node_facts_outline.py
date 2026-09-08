@@ -29,10 +29,26 @@ def _no_llu_factory():
     return make
 
 
-def _five_flat_sections() -> list[dict]:
-    """满足 outline 节点质量门槛（≥3 章、≥5 叶）的假目录。"""
-    return [{"id": str(i), "title": t} for i, t in enumerate(
-        ["总体方案", "实施组织", "质量保障", "培训方案", "售后服务"], 1)]
+def _five_flat_sections() -> dict:
+    """满足 outline 节点质量门槛（≥3 章、≥5 叶）的紧凑假目录（t/d/w/c 单字母键）。"""
+    return {"s": [{"t": t} for t in
+                  ["总体方案", "实施组织", "质量保障", "培训方案", "售后服务"]]}
+
+def test_compact_outline_maps_to_outline():
+    """紧凑模型 -> Outline：位置编号、非叶 w 置 0、total_words 为叶子和。"""
+    from biaoshu_gen.schemas import CompactOutline
+
+    co = CompactOutline.model_validate({
+        "s": [{"t": "总体方案", "w": 9, "c": [
+            {"t": "项目理解", "c": [{"t": "背景", "d": "理解需求", "w": 300},
+                                    {"t": "目标", "w": 200}]}]}]})
+    o = co.to_outline()
+    n = o.sections[0]
+    assert (n.id, n.title, n.target_words) == ("1", "总体方案", 0)   # 非叶 w 置 0
+    assert (n.children[0].id, n.children[0].title) == ("1.1", "项目理解")
+    leaf = n.children[0].children[0]
+    assert (leaf.id, leaf.description, leaf.target_words) == ("1.1.1", "理解需求", 300)
+    assert o.total_words == 500                                      # 叶子求和
 
 
 def test_facts_existing_yaml_wins(tmp_path: Path, monkeypatch):
@@ -83,7 +99,7 @@ def test_outline_prefers_edited_facts_yaml(tmp_path: Path, monkeypatch):
             tool_name = info.output_tools[0].name if info.output_tools else "final_result"
             return ModelResponse(parts=[ToolCallPart(
                 tool_name=tool_name,
-                args=json.dumps({"sections": _five_flat_sections(), "total_words": 500}),
+                args=json.dumps(_five_flat_sections()),
             )])
         return Agent(model=FunctionModel(fn), output_type=output_type,
                      system_prompt=system_prompt, retries=retries)
@@ -106,7 +122,7 @@ def test_outline_falls_back_to_state_facts(tmp_path: Path, monkeypatch):
             tool_name = info.output_tools[0].name if info.output_tools else "final_result"
             return ModelResponse(parts=[ToolCallPart(
                 tool_name=tool_name,
-                args=json.dumps({"sections": _five_flat_sections(), "total_words": 500}),
+                args=json.dumps(_five_flat_sections()),
             )])
         return Agent(model=FunctionModel(fn), output_type=output_type,
                      system_prompt=system_prompt, retries=retries)
@@ -132,6 +148,48 @@ def test_outline_sanitize_meta_leak():
     assert titles[0] == "项目理解与总体建设思路"
     assert all("重新输出" not in t and "此处命名" not in t for t in titles)
     assert max(len(t) for t in titles) <= 40
+
+
+def test_facts_goods_bid_seeds_goods_list_placeholder(tmp_path: Path, monkeypatch, fake_agent_factory):
+    """货物类标书：LLM 未填 goods_list 时用采购清单预置 placeholder（feedback #74）。"""
+    from biaoshu_gen.schemas import TenderMetadata, TenderRequirements
+
+    monkeypatch.chdir(tmp_path)
+    state = BidState(run_id="run-g",
+                     metadata=TenderMetadata(bid_type="货物"),
+                     requirements=TenderRequirements(purchase_list=["X100 边缘计算盒子", "X200 网关"]))
+    monkeypatch.setattr(facts_mod, "make_agent",
+                        fake_agent_factory({GlobalFacts: {"schedule": "30 天"}}))   # LLM 没填 goods_list
+    updates = facts_mod.facts_node(state)
+    assert updates["facts"].goods_list == ["X100 边缘计算盒子", "X200 网关"]
+    yaml_text = (run_dir(state) / "03_facts.yaml").read_text(encoding="utf-8")
+    assert "goods_list" in yaml_text and "X100" in yaml_text
+
+
+def test_facts_goods_bid_keeps_llm_filled_list(tmp_path: Path, monkeypatch, fake_agent_factory):
+    """LLM 已提炼 goods_list 时保留，不被采购清单覆盖。"""
+    from biaoshu_gen.schemas import TenderMetadata, TenderRequirements
+
+    monkeypatch.chdir(tmp_path)
+    state = BidState(run_id="run-g2",
+                     metadata=TenderMetadata(bid_type="货物"),
+                     requirements=TenderRequirements(purchase_list=["采购清单占位"]))
+    monkeypatch.setattr(facts_mod, "make_agent",
+                        fake_agent_factory({GlobalFacts: {"goods_list": ["X100 边缘计算盒子"]}}))
+    updates = facts_mod.facts_node(state)
+    assert updates["facts"].goods_list == ["X100 边缘计算盒子"]
+
+
+def test_facts_non_goods_bid_keeps_goods_list_empty(tmp_path: Path, monkeypatch, fake_agent_factory):
+    """非货物类：goods_list 保持空，不预置。"""
+    from biaoshu_gen.schemas import TenderMetadata
+
+    monkeypatch.chdir(tmp_path)
+    state = BidState(run_id="run-s", metadata=TenderMetadata(bid_type="服务"))
+    monkeypatch.setattr(facts_mod, "make_agent",
+                        fake_agent_factory({GlobalFacts: {"schedule": "60 天"}}))
+    updates = facts_mod.facts_node(state)
+    assert updates["facts"].goods_list == []
 
 
 def test_facts_prompt_includes_template_tables(tmp_path: Path, monkeypatch, fake_agent_factory):

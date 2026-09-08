@@ -1,32 +1,53 @@
-"""fill 节点公共驱动：预填确定值 + 预注入上下文 + 共享 prompt 后缀。
+"""fill 节点公共支撑：预填确定值 + 预注入上下文 + 共享 prompt 后缀。
 
-三个 fill 节点（forms/commercial/deviation）差异仅在于：输出字段名、附加输入、
-有无"模板须含某小节"门槛、业务企业资料。统一收敛到 run_fill_node 一个驱动。
+fill 两节点（forms/deviation）共用的取值/预填/上下文原语；forms 侧的程序化
+plan + harness 兜底编排在 nodes/fill_forms.py，偏离表在 nodes/deviation_table.py。
 """
 import logging
 from pathlib import Path
 
 from docx import Document
 
-from .docx_io import body_children_count, template_has_section
 from .fill_skill import (
     dump_fill_points, fill_all_blanks, fill_blank_before_label, fill_label_blank,
 )
-from .harness import HarnessTask, prepare_agent_workspace, run_harness_task
-from .kb import KnowledgeBase
+from .ledger import build
 from .schemas import GlobalFacts, from_yaml_file
 from .state import BidState, run_dir
 
 # 小节判定/组装锚定关键词的单一注册表（gate 与 assemble 共用，避免两处定义漂移）
 log = logging.getLogger(__name__)
 
-# 切片小于该 body 元素数视为"无可填内容"(如 3 元素章节封面),跳过 LLM 填充
-MIN_FILLABLE_CHILDREN = 5
+# 同桶附加段的并行填充线程数（免费档限流，压保守）
+_EXTRA_WORKERS = 3
 
 SECTION_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "commercial": ("商务部分", "商务"),
     "deviation": ("偏离表", "偏离"),
 }
+
+# 模板可填点地图的 prompt 头（build_fill_context 两处复用）。
+# 图例按真实 run（run-20260908-095225 FormsFill）暴露的踩坑点编写：
+# 跳号/下标不进 op、已预填段自动跳过、括号占位走 replace、表格空列表与 row/col 语义。
+# 填空统一走 label（blank 已并入）：有无线均可填、全命中、已填自动跳过。
+FILL_POINT_MAP_INTRO = (
+    "【模板可填点地图】模板切片内全部可填点的索引（空段落与纯正文段已省略，只列可填点，"
+    "故下标有跳号；下标仅供阅读对照，op 不接收下标，执行一律按文本匹配）：\n"
+    "- 段落行形如 [i](线) 开头文本（截断 50 字）：\n"
+    "  · (线) = 该段含下划线填空位（值落在线上并保留余线）；无 (线) 的标签段同样"
+    "可填——值直接跟在标签后\n"
+    "  · 标签文本直接作 label（抄到「标签+冒号」为止，勿带 tab、空格或已填的旧值）；"
+    "填全部命中，标签后已是实义文本（已填过）的命中自动跳过——同文本多段（如多份"
+    "承诺书的签章行）一条 label 即可全覆盖\n"
+    "  · 「（项目名称）」「（采购人名称）」等括号占位：用 replace 把括号连同占位词"
+    "整体替换为实际值\n"
+    "  · 签字/盖章/日期落款的段落：跳过，不要对其发 op\n"
+    "- 表格行形如 [Tk] 表头各列 | … （N 行）：同表多格**必须**用 table 按行批量填"
+    "（table_header 照抄地图 [Tk] 后的表头文本；rows 每个内层 list 是一行按列对位，"
+    "null=跳过该格，start_row 默认 1=表头后首行，行数不足自动加行）；散落个别格子才用"
+    " cell（row/col 从 0 起，0=表头行）；金额等人工填写项与缺失资料**不发 op**（占位值"
+    "会被丢弃），null 跳过即可；== 表格 == 之下无条目 = 本切片没有表格，勿发 cell/table"
+)
+
 
 # 已知值字段 -> 模板中可能出现的标签同义词。
 # 配合 fill_all_blanks 的标签边界护栏（:40-41），同义词不会误中 地址/电话 等邻近字段：
@@ -100,12 +121,11 @@ def build_fill_context(state: BidState, tpl_doc: Document | None = None) -> str:
     d = run_dir(state)
 
     if tpl_doc is not None:
-        parts.append("【模板可填点地图（dump_fill_points 输出；段落 [i](线)=带填空线，表格 [Ti]=表头）】\n"
-                     + dump_fill_points(tpl_doc))
+        parts.append(FILL_POINT_MAP_INTRO + "\n\n" + dump_fill_points(tpl_doc))
     else:
         tpl = Path(state.template_docx_path) if state.template_docx_path else Path()
         if tpl.exists():
-            parts.append("【模板可填点地图（dump_fill_points 输出；段落 [i](线)=带填空线，表格 [Ti]=表头）】\n"
+            parts.append(FILL_POINT_MAP_INTRO + "\n\n"
                          + dump_fill_points(Document(str(tpl))))
 
     facts = d / "03_facts.yaml"
@@ -117,10 +137,15 @@ def build_fill_context(state: BidState, tpl_doc: Document | None = None) -> str:
     if metadata.exists():
         parts.append("【metadata.yaml 全文】\n" + metadata.read_text(encoding="utf-8"))
 
-    images = KnowledgeBase.load(Path(state.kb_dir)).image_paths()
-    if images:
+    ledger = build(Path(state.kb_dir))
+    if ledger.texts:
+        # 企业信息摘要：商务内容（资质/案例/人员/业绩）程序化路径的唯一事实来源
+        parts.append("【企业信息摘要（资质/案例/人员/业绩只能引用其中实有内容；单源截断）】\n"
+                     + "\n\n".join(f"### 来源：{name}\n{text[:600]}"
+                                    for name, text in ledger.texts))
+    if ledger.images:
         parts.append("【kb 图片绝对路径（插图 op 的 img 参数用这些；禁止读取图片内容）】\n"
-                     + "\n".join(f"- {p.resolve()}" for p in images))
+                     + "\n".join(f"- {p.resolve()}" for p in ledger.images))
 
     return "\n\n".join(parts)
 
@@ -138,77 +163,46 @@ def fill_ws_subdir(bucket: str, ws_key: str = "") -> str:
 
 
 def run_with_extras(state: BidState, bucket: str, core) -> dict:
-    """fill 节点统一入口:主流程填充首 run + 同桶附加段各跑一次独立工作区。
+    """fill 节点统一入口:主段 + 同桶附加段各跑一次独立工作区，全部并行提交。
 
     core 签名 (state, ws_key="") -> dict;返回 updates 并附 extra_products。
+    主段与附加段互相独立(工作区 ws_key 隔离、模板源各取自己的 part)，同时提交
+    线程池——附加段不再等主段跑完(每段一次完整 LLM 调用,串行时 N+1 段即 N+1 倍
+    耗时),总耗时从 sum 降为 max。免费档限流,并发压在 _EXTRA_WORKERS。
     单个附加段失败不拖垮整体(记 warning,装配回退该段原始 part)。
     """
-    updates = core(state)
-    extras: dict[str, str] = {}
-    if updates.get(f"{bucket}_docx_path"):
+    if not resolve_template_src(state, bucket):
+        return core(state)          # 无模板:主段自行 skip 返回空路径,附加段无从谈起
+
+    try:
+        from .nodes.split_template import load_entries, read_parts_yaml  # 避免环
+        entries = [e for e in load_entries(read_parts_yaml(run_dir(state)))
+                   if e["bucket"] == bucket and not e.get("primary")]
+    except Exception:
+        entries = []
+
+    def _run_extra(e: dict) -> tuple[str, str] | None:
+        sub = state.model_copy(update={"template_parts": {bucket: e["path"]}})
         try:
-            from .nodes.split_template import load_entries, read_parts_yaml  # 避免环
-            entries = [e for e in load_entries(read_parts_yaml(run_dir(state)))
-                       if e["bucket"] == bucket and not e.get("primary")]
-        except Exception:
-            entries = []
-        for e in entries:
-            sub = state.model_copy(update={"template_parts": {bucket: e["path"]}})
-            try:
-                up = core(sub, ws_key=e["key"])
-            except Exception as exc:
-                log.warning("[%s] 附加段 %s 填充失败(%s),装配将回退原始 part",
-                            bucket, e["key"], exc)
-                continue
-            path = up.get(f"{bucket}_docx_path")
-            if path:
-                extras[e["key"]] = path
-        if extras:
-            log.info("[%s] %d 个附加区间已完成独立填充", bucket, len(extras))
+            up = core(sub, ws_key=e["key"])
+        except Exception as exc:
+            log.warning("[%s] 附加段 %s 填充失败(%s),装配将回退原始 part",
+                        bucket, e["key"], exc)
+            return None
+        path = up.get(f"{bucket}_docx_path")
+        return (e["key"], path) if path else None
+
+    extras: dict[str, str] = {}
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=_EXTRA_WORKERS) as pool:
+        main = pool.submit(core, state)                     # 主段(默认工作区)
+        extra_futs = {e["key"]: pool.submit(_run_extra, e) for e in entries}
+        updates = main.result()
+        for key, fut in extra_futs.items():
+            r = fut.result()
+            if r:
+                extras[r[0]] = r[1]
     if extras:
+        log.info("[%s] %d 个附加区间已完成独立填充", bucket, len(extras))
         updates["extra_products"] = extras
     return updates
-
-
-def run_fill_node(state: BidState, *, subdir: str, output_field: str, output_name: str,
-                  extra_inputs: list[tuple[Path, str]], system: str,
-                  build_user_prompt,
-                  required_keyword: str | None = None,
-                  part: str | None = None,
-                  ws_key: str = "") -> dict:
-    """fill 三节点公共驱动：门槛判断 -> 工作区 -> 预填确定值 -> 预注入上下文 -> harness。
-
-    build_user_prompt(output) -> str 由调用方构造（forms 需企业资料）。
-    part 指定四分拆 bucket 时工作区模板用对应 part,缺失回退整模板。
-    ws_key:附加段隔离工作区名(fill_ws_dir 唯一推导)。
-    """
-    tpl_src = resolve_template_src(state, part)
-    if not tpl_src:
-        print(f"ℹ 无响应模板，跳过 {subdir} 节点。")
-        return {output_field: ""}
-    if part:
-        subdir = fill_ws_subdir(part, ws_key)
-    using_part = tpl_src != (state.template_docx_path or "")
-    if using_part:                              # 切片过小=无可填内容(如章节封面 3 元素):
-        n_children = body_children_count(tpl_src)
-        if n_children < MIN_FILLABLE_CHILDREN:  # 跳过填充——flash 曾强行从 tender.md
-            print(f"ℹ {subdir} part 仅 {n_children} 元素,无可填内容,跳过(防复述扩写)。")
-            return {output_field: ""}           # 扩写成整章,白烧 LLM 还需守卫兜底
-    if required_keyword and not using_part and \
-            not template_has_section(Path(tpl_src), required_keyword):
-        print(f"ℹ 响应模板中无「{required_keyword}」，跳过 {subdir} 节点。")
-        return {output_field: ""}
-
-    ws = prepare_agent_workspace(state, subdir, extra_inputs, template_src=tpl_src)
-    out = ws / output_name
-    doc = Document(str(ws / "标书模板.docx"))               # 只解析一次：预填 + 地图共用
-    prefilled = prefill_known(doc, state)
-    doc.save(str(ws / "标书模板.docx"))
-
-    prompt = (system + "\n\n" + build_user_prompt(str(out))
-              + "\n\n" + build_fill_context(state, tpl_doc=doc)
-              + "\n\n" + VALUE_PRIORITY)
-    if prefilled:
-        prompt += "\n\n" + PREFILL_NOTE + "\n- ".join(prefill_summary(prefilled))
-    run_harness_task(HarnessTask(prompt=prompt, cwd=ws, expected_outputs=[out]))
-    return {output_field: str(out)}

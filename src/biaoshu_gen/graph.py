@@ -25,7 +25,7 @@ STAGES = {
     "facts":    StageSpec(("facts",)),
     "outline":  StageSpec(("outline",)),
     "body":     StageSpec(("body", "body_review"), ("body_review",)),
-    "fill":     StageSpec(("fill_forms", "deviation_table", "commercial")),
+    "fill":     StageSpec(("fill_forms", "deviation_table")),
     "assemble": StageSpec(("assemble",)),
     "review":   StageSpec(("review",)),
     "revise":   StageSpec(("revise",)),
@@ -33,7 +33,7 @@ STAGES = {
 STAGE_ORDER = ["parse", "template", "facts", "outline", "body",
                "fill", "assemble", "review", "revise"]
 
-FILL_NODES = ["fill_forms", "deviation_table", "commercial"]
+FILL_NODES = ["fill_forms", "deviation_table"]
 
 
 def route_after_body_review(state: BidState) -> str | list[str]:
@@ -67,7 +67,7 @@ def build_graph(node_overrides: dict[str, NodeFn] | None = None,
     builder.add_conditional_edges(
         "body_review", route_after_body_review,
         {"body": "body", "fill_forms": "fill_forms",
-         "deviation_table": "deviation_table", "commercial": "commercial"})
+         "deviation_table": "deviation_table"})
     for n in FILL_NODES:
         builder.add_edge(n, "assemble")
     builder.add_edge("assemble", "review")

@@ -28,7 +28,7 @@ cp docs/标书模板_软件.docx data/tender/标书模板.docx
 ## 分阶段使用（人工控制点：03_facts.yaml / 04_outline.yaml 可编辑后续跑）
 
 ```bash
-poetry run biaoshu init --tender data/tender/软件招标文件.docx --kb data/company
+poetry run biaoshu init --tender data/tender/服务招标文件.docx --kb data/company
 poetry run biaoshu parse      # 招标解析（按目录分节阅读）→ 01_parse/
 poetry run biaoshu template   # 响应模板抽取（harness）→ 02_template/
 poetry run biaoshu facts      # 全局事实 → 03_facts.yaml（可人工编辑）
@@ -43,6 +43,30 @@ poetry run biaoshu status     # 查看进度
 ```
 
 全自动（冒烟）：`poetry run biaoshu run`
+
+## 重跑某个阶段（rerun）
+
+每个阶段完成时都会备份 checkpoint 到 `data/runs/<run>/checkpoints/<stage>.sqlite`，
+`rerun` 回退到**该阶段开始前**的状态并重跑——典型场景：对某阶段产物不满意、
+修改了阶段代码后想用新代码重新生成。
+
+```bash
+# 例：parse 产物不满意，修改解析代码后重跑（其余阶段产物不受影响）
+poetry run biaoshu rerun parse
+
+# 重跑指定 run 的某阶段（默认取最近一次 run）
+poetry run biaoshu rerun outline --run-id run-20260904-101500
+```
+
+行为说明：
+- **中间阶段**（template 及之后）：回退到其**前一个阶段完成时**的 checkpoint 再重跑，
+  该阶段之后产生的状态被丢弃
+- **parse 是首个阶段**，没有前序 checkpoint：直接清空当前进度从头重跑
+- **rerun 会先删除该阶段的产物**再重跑（如 `rerun facts` 删 `03_facts.yaml`、`rerun body` 删 `05_body/`）——因为 facts/outline 等节点「产物存在即跳过」；注意若被重跑的阶段产物正是你手工编辑过的控制点文件（03_facts.yaml/04_outline.yaml），编辑内容会随重跑消失，请先自行备份
+- 重跑后想继续往下走：直接执行后续阶段命令即可（未重跑的阶段若已完成会被跳过；
+  若要从中间恢复，`rerun <后续阶段>` 会先回退到其前序备份再执行）
+- 本地开发的产品知识库是固定 dataset（`RAGFLOW_DATASET_NAME`），`rerun parse`
+  不会重复上传——同名文件在 init/载入时自动跳过
 
 ## 真实模型端到端测试（验收用）
 
@@ -74,7 +98,7 @@ HARNESS_MODEL=glm-4.6
 ```bash
 export PYTHONIOENCODING=utf-8     # Windows GBK 控制台显示中文（可选）
 
-poetry run biaoshu init --tender data/tender/软件招标文件.docx --kb data/company
+poetry run biaoshu init --tender data/tender/服务招标文件.docx --kb data/company
 ```
 
 | 阶段 | 命令 | 验收点（data/runs/<run_id>/ 下） |
@@ -84,7 +108,7 @@ poetry run biaoshu init --tender data/tender/软件招标文件.docx --kb data/c
 | 事实 | `biaoshu facts` | `03_facts.yaml`（工期/人员/指标/承诺）——**人工控制点**，可编辑 |
 | 目录 | `biaoshu outline` | `04_outline.yaml`：三级提纲（一级章名对齐技术评分项、三级小节带 target_words）——**人工控制点**，可编辑 |
 | 正文 | `biaoshu body` | `05_body/`：每个三级小节一个 `{id}-{标题}.md` + `body.md`（树状拼装）+ `body_review_round_N.md`（含"待修复小节"清单，回环只重写问题小节） |
-| 填表 | `biaoshu fill` | `06_fill/forms|deviation|commercial/` 三个 docx（真实调用 Claude Code SDK 填写） |
+| 填表 | `biaoshu fill` | `06_fill/forms|deviation/` 两个 docx（forms=其余填写部分整体：程序化 plan 填写 + harness 兜底；deviation=偏离表直出数据行） |
 | 拼装 | `biaoshu assemble` | `07_draft/标书草稿_v1.docx` + latest.txt |
 | 审核 | `biaoshu review` | `08_review/review_round_1.md`（五项检查 + `VERDICT: PASS|FAIL` 行） |
 | 修改 | `biaoshu revise` | FAIL 时按意见修订出 `标书草稿_v2.docx` 并复审（≤2 轮，用尽仍 FAIL 则报告标注"需人工处理"） |

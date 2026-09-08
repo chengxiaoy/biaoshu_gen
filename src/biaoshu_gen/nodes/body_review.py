@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from ..config import get_settings
-from ..kb import count_chars
+from ..utils import count_chars
 from ..models import make_agent, run_sync
 from ..prompts.body_review import SYSTEM, build_user_prompt
 from ..schemas import BodyReviewReport, from_yaml_file

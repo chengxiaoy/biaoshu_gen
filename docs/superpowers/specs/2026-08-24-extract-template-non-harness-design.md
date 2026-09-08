@@ -93,7 +93,7 @@ review 读 `02_template/template.md`;cli status 列该文件。
   - 首次非法+重试合法 → 成功;两次非法 → TemplateExtractError;
   - 随附模板存在 → 不调 LLM 直接复制;
   - 剪裁出的副本不含格式章节之前内容(如「投标人须知」正文特征)。
-- **真实验收**:`data/tender/软件招标文件.docx` 与 `标准的招标文件.docx` 各跑一次
+- **真实验收**:`../../../data/tender/服务招标文件.docx` 与 `货物招标文件.docx` 各跑一次
   节点级脚本:标书模板.docx 非空、含格式特征(投标函/偏离表等)、
   不含非格式章节内容;template.md 目录树完整。
 

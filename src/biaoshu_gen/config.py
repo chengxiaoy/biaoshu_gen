@@ -41,6 +41,21 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("HARNESS_MODEL", "HARNESS_MODEL_NAME"),
     )
 
+    # DeepSeek V4 思考模式开关（经 extra_body 注入 thinking 字段）：
+    # V4 思考模式默认开启且拒绝强制 tool_choice，结构化输出（ToolOutput）在其官方端点必 400，
+    # 官方直连需设 disabled；OpenRouter 网关自会兼容，留空即不注入、跟随 provider 默认。
+    llm_thinking: str = Field(
+        default="",
+        validation_alias=AliasChoices("LLM_THINKING"),
+    )
+
+    @field_validator("llm_thinking")
+    @classmethod
+    def _normalize_thinking(cls, v: str) -> str:
+        """只认 enabled/disabled（大小写不敏感），其余归空 = 跟随 provider 默认。"""
+        v = v.strip().lower()
+        return v if v in ("enabled", "disabled") else ""
+
     @field_validator("llm_base_url")
     @classmethod
     def _strip_completions_path(cls, v: str) -> str:
@@ -62,16 +77,41 @@ class Settings(BaseSettings):
                 return v[: -len(suffix)]
         return v
 
+    # RAGFlow（kb_v2 知识库 v2）：远程 server 连接与命名，.env 注入 RAGFLOW_*。
+    # base_url 不带 /api/v1 尾巴（SDK 自拼）；默认端口 9380 为 RAGFlow 出厂值。
+    ragflow_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("RAGFLOW_API_KEY"),
+    )
+    ragflow_base_url: str = Field(
+        default="http://localhost:9380",
+        validation_alias=AliasChoices("RAGFLOW_BASE_URL"),
+    )
+    # 产品知识库固定 dataset 名：本地开发阶段所有 run 共用一个库，init 幂等增量上传。
+    ragflow_dataset_name: str = Field(
+        default="biaoshu-products",
+        validation_alias=AliasChoices("RAGFLOW_DATASET_NAME"),
+    )
+    ragflow_chat_name: str = "biaoshu-assistant"    # Agentic RAG 问答助手名，get-or-create
+    ragflow_llm_id: str = ""                        # 助手 LLM id；空用租户默认（见 tests/test_ragflow.py 的 model）
+
     data_dir: Path = Path("data")
 
     # 流程控制参数（设计文档 §7）
-    body_review_max_rounds: int = 2
+    body_review_max_rounds: int = 1
     revise_max_rounds: int = 1         # review→revise 只修一轮；数据缺口类已不计入 FAIL，多轮收益低
-    word_tolerance: float = 0.5
+    word_tolerance: float = 1
     harness_max_turns: int = 100
     kb_top_k: int = 5
     body_concurrency: int = 6         # 正文按三级小节并发生成的并发数
     parse_concurrency: int = 6        # parse 分组抽取的并发数(#69)
+    media_table_limit: int = 3        # rich_body：全书表格数量上限
+    media_figure_limit: int = 3       # rich_body：全书 mermaid 图数量上限
+    # mermaid 渲染校验（rich_body figure 的真实渲染检查）：依赖 mmdc（@mermaid-js/mermaid-cli）
+    mermaid_render: bool = True            # False 时只用结构校验
+    mermaid_cli: str = "mmdc"              # 可执行文件名或完整路径（which 解析）
+    mermaid_render_timeout: float = 60.0   # 单次渲染超时（秒）
+    mermaid_puppeteer_config: str = ""     # 留空自动探测 Edge/Chrome；可指向自定义 puppeteer json
 
 
 @lru_cache

@@ -81,3 +81,16 @@ def test_extract_template_prompt_renders_block_lines_and_json_rule():
     p = build_user_prompt("[0] 封面\n[1] 第七章 投标文件的格式")
     assert "[1] 第七章 投标文件的格式" in p
     assert '"start_index"' in p and "null" in p     # JSON 输出指令存在且花括号转义渲染成功
+
+
+def test_tender_metadata_bid_type_normalized():
+    """bid_type 归一：变体映射三类、未识别留空（LLM 口径容错）。"""
+    from biaoshu_gen.schemas import TenderMetadata
+
+    assert TenderMetadata(bid_type="货物类").bid_type == "货物"
+    assert TenderMetadata(bid_type=" 建设工程 ").bid_type == "工程"
+    assert TenderMetadata(bid_type="工程施工服务").bid_type == "工程"   # 特异性序
+    assert TenderMetadata(bid_type="货物及服务").bid_type == "货物"
+    assert TenderMetadata(bid_type="本项目为信息化服务采购").bid_type == "服务"
+    assert TenderMetadata(bid_type="不知道").bid_type == ""            # 未识别留空
+    assert TenderMetadata().bid_type == ""                             # 默认空

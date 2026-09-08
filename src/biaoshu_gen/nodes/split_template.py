@@ -1,9 +1,12 @@
-"""节点 2b：响应模板四分拆（fill 前置）。
+"""节点 2b：响应模板三分拆（fill 前置）。
 
 有标题模板走确定性规则（标题关键词归类），无标题模板 LLM 兜底分段；
-物理拆分用 clip_docx_keep 整包副本多区间保留。产出 parts/ 四份 part docx
+物理拆分用 clip_docx_keep 整包副本多区间保留。产出 parts/ 各 part docx
 与 parts.yaml 清单（bucket → path/sections/first_element_index，order 为
 文档原序），state.template_parts 供 fill 各节点取用与 assemble 顺序拼接。
+
+三分（feedback #78）：偏离表 / 技术方案 / 其余整体（forms 为 catch-all，
+投标函/报价/资格/商务等内容合为一桶，由合并后的 fill_forms 节点填写）。
 """
 from pathlib import Path
 
@@ -20,14 +23,13 @@ from ..state import BidState, run_dir
 
 _RETRY_TIMES = 2   # 首次 + 校验失败重试一次
 
-BUCKETS = ("deviation", "technical", "forms", "commercial")
+BUCKETS = ("deviation", "technical", "forms")
 PART_NAMES = {"deviation": "偏离表部分.docx", "technical": "技术方案部分.docx",
-              "forms": "表格填写部分.docx", "commercial": "商务填写部分.docx"}
-# 按序命中,先到先得;commercial 为 catch-all 不设关键词
+              "forms": "其余填写部分.docx"}
+# 按序命中,先到先得;forms 为 catch-all 不设关键词(其余整体,含投标函/报价/资格/商务)
 KEYWORDS = {
     "deviation": ("偏离",),
     "technical": ("实施方案", "技术方案", "技术部分"),
-    "forms": ("投标函", "响应声明", "报价", "价格", "一览表", "开标", "资格"),
 }
 
 
@@ -39,7 +41,7 @@ def classify_title(title: str) -> str:
     for bucket in BUCKETS[:-1]:
         if any(kw in title for kw in KEYWORDS[bucket]):
             return bucket
-    return "commercial"
+    return "forms"
 
 
 def _split_by_headings(doc) -> dict[str, list[int]] | None:
@@ -49,7 +51,7 @@ def _split_by_headings(doc) -> dict[str, list[int]] | None:
     """
     assign: dict[str, list[int]] = {}
     sections: dict[str, list[str]] = {}
-    current = "commercial"
+    current = "forms"
     saw_heading = False
     for i, child in enumerate(doc.element.body.iterchildren()):
         if child.tag == qn("w:p"):
@@ -108,8 +110,8 @@ def _split_by_llm(doc, tpl: Path) -> dict[str, list[int]]:
     if spans is None:
         raise TemplateSplitError(f"模板拆分失败:两次输出均未通过校验(最后错误:{err})")
 
-    # 块序号区间 -> 元素下标区间;未覆盖块归 commercial
-    assign: dict[str, list[int]] = {"commercial": []}
+    # 块序号区间 -> 元素下标区间;未覆盖块归 forms(其余整体)
+    assign: dict[str, list[int]] = {"forms": []}
     sections: dict[str, list[str]] = {}
     covered: list[tuple[int, int, str]] = []
     for start_blk, end_blk, bucket in spans:
@@ -120,10 +122,10 @@ def _split_by_llm(doc, tpl: Path) -> dict[str, list[int]]:
     cursor = 0
     all_el = list(range(n_children))
     for start_el, end_el, bucket in covered:
-        assign.setdefault("commercial", []).extend(all_el[cursor:start_el])
+        assign.setdefault("forms", []).extend(all_el[cursor:start_el])
         assign.setdefault(bucket, []).extend(all_el[start_el:end_el])
         cursor = end_el
-    assign["commercial"].extend(all_el[cursor:])
+    assign["forms"].extend(all_el[cursor:])
     assign["_sections"] = sections                        # type: ignore[assignment]
     return assign
 

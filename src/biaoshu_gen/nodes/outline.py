@@ -3,7 +3,9 @@ from pathlib import Path
 
 from ..models import make_agent, run_sync
 from ..prompts.outline import SYSTEM, build_user_prompt
-from ..schemas import GlobalFacts, Outline, OutlineNode, from_yaml_file, to_yaml_file
+from ..schemas import (
+    CompactOutline, GlobalFacts, Outline, OutlineNode, from_yaml_file, to_yaml_file,
+)
 from ..state import BidState, run_dir
 
 _MIN_SECTIONS = 3        # 一级章过少视为生成失败，自动重试
@@ -36,7 +38,7 @@ def outline_node(state: BidState) -> dict:
     facts_yaml = run_dir(state) / "03_facts.yaml"
     # 用户编辑优先：03_facts.yaml 存在则以其内容覆盖 state.facts（resume 时不用陈旧值）
     facts = from_yaml_file(GlobalFacts, facts_yaml) if facts_yaml.exists() else state.facts
-    agent = make_agent(Outline, SYSTEM)
+    agent = make_agent(CompactOutline, SYSTEM)
     prompt = build_user_prompt(
         requirements=state.requirements.model_dump_json(indent=2) if state.requirements else "",
         technical_rules="\n".join(state.scoring.technical_rules) if state.scoring else "",
@@ -44,7 +46,7 @@ def outline_node(state: BidState) -> dict:
     )
     result: Outline | None = None
     for _ in range(_MAX_GEN_ATTEMPTS):
-        result = _sanitize(run_sync(agent, prompt).output)
+        result = _sanitize(run_sync(agent, prompt).output.to_outline())
         if len(result.sections) >= _MIN_SECTIONS and len(result.leaves()) >= _MIN_LEAVES:
             break
     assert result is not None and len(result.sections) >= _MIN_SECTIONS \
