@@ -36,7 +36,7 @@ def _state(tmp_path: Path, monkeypatch, version: int = 0, **paths) -> BidState:
     d = run_dir(BidState(run_id="run-1"))
     body = d / "05_body"
     body.mkdir(parents=True, exist_ok=True)
-    (body / "body.md").write_text("# 1 总体思路\n\n总体思路内容。", encoding="utf-8")
+    (body / "body.md").write_text("# 总体思路\n\n总体思路内容。", encoding="utf-8")
     for name in ("forms", "deviation"):
         p = d / "06_fill" / name / f"{name}.docx"
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -93,7 +93,7 @@ def test_assemble_fallback_without_heading_styles(tmp_path: Path, monkeypatch):
     d = run_dir(BidState(run_id="run-1"))
     body = d / "05_body"
     body.mkdir(parents=True, exist_ok=True)
-    (body / "body.md").write_text("# 1 总体思路\n\n总体思路内容。", encoding="utf-8")
+    (body / "body.md").write_text("# 总体思路\n\n总体思路内容。", encoding="utf-8")
 
     plain = Document()                                # 无 Heading 样式
     plain.add_paragraph("封面页")
@@ -150,7 +150,7 @@ def test_assemble_concatenates_parts_in_template_order(tmp_path: Path, monkeypat
 
     body = d / "05_body"
     body.mkdir(parents=True)
-    (body / "body.md").write_text("# 1 总体思路\n\n总体思路内容。", encoding="utf-8")
+    (body / "body.md").write_text("# 总体思路\n\n总体思路内容。", encoding="utf-8")
 
     def _filled(bucket: str, marker: str) -> str:
         src = Document(parts[bucket])
@@ -218,7 +218,7 @@ def test_assemble_migrates_images_from_parts(tmp_path: Path, monkeypatch):
 
     body = d / "05_body"
     body.mkdir(parents=True)
-    (body / "body.md").write_text("# 1 总体思路\n\n内容。", encoding="utf-8")
+    (body / "body.md").write_text("# 总体思路\n\n内容。", encoding="utf-8")
     state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
                      template_docx_path=str(tpl), template_parts=parts,
                      forms_docx_path=str(frm_out))
@@ -266,7 +266,7 @@ def test_assemble_stitches_interleaved_runs_in_document_order(tmp_path: Path, mo
         dd = Document(src); dd.add_paragraph(marker); dd.save(out); return str(out)
 
     body = d / "05_body"; body.mkdir(parents=True)
-    (body / "body.md").write_text("# 1 总体\n思路内容。", encoding="utf-8")
+    (body / "body.md").write_text("# 总体\n思路内容。", encoding="utf-8")
     forms2_src = next(e["path"] for e in man["entries"] if e["key"] == "forms_2")
     filled_forms = d / "06_fill" / "forms" / "forms.docx"
     filled_forms.parent.mkdir(parents=True, exist_ok=True)
@@ -319,7 +319,7 @@ def test_assemble_guards_against_bloated_product(tmp_path: Path, monkeypatch):
     bd.save(bloated)
 
     body = d / "05_body"; body.mkdir(parents=True)
-    (body / "body.md").write_text("# 1 总体\n思路内容。", encoding="utf-8")
+    (body / "body.md").write_text("# 总体\n思路内容。", encoding="utf-8")
     state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
                      template_docx_path=str(tpl), template_parts=parts,
                      forms_docx_path=str(bloated))
@@ -329,9 +329,99 @@ def test_assemble_guards_against_bloated_product(tmp_path: Path, monkeypatch):
     assert sum(1 for t in texts if t == "第七章 投标文件的格式") == 1  # 原始切片就位
 
 
-def test_assemble_demotes_body_headings_to_anchor_level(tmp_path: Path, monkeypatch):
-    """#70:技术节注入的正文标题须降级到锚点层级——锚是 H2 时正文 H1→H2、H2→H3,
-    保证目录层级不断裂(正文 H1 曾直接成章,与宿主标题平级)。"""
+def _write_technical_parts(d: Path, part_docx: Path) -> None:
+    """手工构造单 technical run 的 parts.yaml(assemble 只读清单,不经 split 节点)。"""
+    import yaml
+
+    parts_dir = d / "02_template" / "parts"
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    (parts_dir / "parts.yaml").write_text(yaml.safe_dump({
+        "entries": [{"key": "technical", "bucket": "technical", "path": str(part_docx),
+                     "primary": True, "first_element_index": 0}],
+    }, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def test_assemble_keeps_body_heading_levels_and_numbers(tmp_path: Path, monkeypatch):
+    """#80(2026-09-09 修订):正文标题恒为 H1/H2/H3、编号恒为 1./1.1/1.1.1——
+    锚点只决定注入落点,不再按锚层级降级(真实模板锚常在格式章深处 H3/H4,
+    降级曾致编号 1.1.1.1 爆炸且级别全钳到 H4,run-20260908-215413 实证)。"""
+    monkeypatch.chdir(tmp_path)
+    d = run_dir(BidState(run_id="run-1"))
+    ws = d / "02_template"
+    ws.mkdir(parents=True)
+    tpl = ws / "标书模板.docx"
+    doc = Document()
+    doc.add_paragraph("第五章 响应文件组成")
+    doc.add_heading("（三）技术部分", level=3)          # 锚在格式章深处 H3
+    doc.add_heading("技术方案", level=4)
+    doc.add_paragraph("（正文格式说明）")
+    doc.save(tpl)
+    part = d / "02_template" / "技术方案部分.docx"
+    part_doc = Document()
+    part_doc.add_heading("技术方案", level=4)           # part 切片:锚 H4 在其中
+    part_doc.save(part)
+    _write_technical_parts(d, part)
+
+    body = d / "05_body"
+    body.mkdir(parents=True)
+    (body / "body.md").write_text(
+        "# 总体思路\n\n总体内容。\n\n## 实施要点\n\n### 进度安排\n\n要点内容。", encoding="utf-8")
+    state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
+                     template_docx_path=str(tpl), forms_docx_path="", deviation_docx_path="")
+    updates = asm.assemble_node(state)
+    styles = {p.text.strip(): p.style.name
+              for p in Document(updates["draft_docx_path"]).paragraphs if p.text.strip()}
+    assert styles["1. 总体思路"] == "Heading 1"         # H1 恒 H1,编号不随锚变深
+    assert styles["1.1 实施要点"] == "Heading 2"
+    assert styles["1.1.1 进度安排"] == "Heading 3"
+
+
+def test_assemble_outline_level_survives_foreign_style_ids(tmp_path: Path, monkeypatch):
+    """真实标书模板的 styleId 是数字自编号,scratch 渲染产物 pStyle=Heading4
+    解析不到 -> 标题塌回 Normal(run-20260908-215413 实测)。大纲级别须直接写
+    w:outlineLvl 兜底,不依赖 pStyle 能否在宿主包解析(通用解法)。"""
+    from docx.oxml.ns import qn
+
+    def _outline(p):
+        pPr = p._p.pPr
+        el = pPr.find(qn("w:outlineLvl")) if pPr is not None else None
+        return el.get(qn("w:val")) if el is not None else None
+
+    monkeypatch.chdir(tmp_path)
+    d = run_dir(BidState(run_id="run-1"))
+    ws = d / "02_template"
+    ws.mkdir(parents=True)
+    tpl = ws / "标书模板.docx"
+    doc = Document()
+    doc.add_paragraph("第五章 响应文件组成")
+    doc.add_heading("技术方案", level=4)
+    doc.styles["Heading 1"].style_id = "T1"        # 模拟真实模板数字/自编号 styleId
+    doc.styles["Heading 2"].style_id = "T2"
+    doc.save(tpl)
+    part = d / "02_template" / "技术方案部分.docx"
+    part_doc = Document()
+    part_doc.add_heading("技术方案", level=4)
+    part_doc.save(part)
+    _write_technical_parts(d, part)
+
+    body = d / "05_body"
+    body.mkdir(parents=True)
+    (body / "body.md").write_text("# 总体思路\n\n总体内容。\n\n## 实施要点\n\n要点内容。",
+                                  encoding="utf-8")
+    state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
+                     template_docx_path=str(tpl), forms_docx_path="", deviation_docx_path="")
+    updates = asm.assemble_node(state)
+    paras = {p.text.strip(): p
+             for p in Document(updates["draft_docx_path"]).paragraphs if p.text.strip()}
+    assert _outline(paras["1. 总体思路"]) == "0"        # H1 → outlineLvl 0(0-based)
+    assert _outline(paras["1.1 实施要点"]) == "1"       # H2 → outlineLvl 1
+    # pStyle 按宿主样式表语义对位后可解析——标题显示样式不再与正文相同
+    assert paras["1. 总体思路"].style.name == "Heading 1"
+    assert paras["1.1 实施要点"].style.name == "Heading 2"
+
+
+def test_assemble_numbers_headings_at_anchor_h1(tmp_path: Path, monkeypatch):
+    """#80:锚 H1(常见章级)时 #→"1." H1、##→"1.1" H2、###→"1.1.1" H3。"""
     from biaoshu_gen.nodes import split_template as st
 
     monkeypatch.chdir(tmp_path)
@@ -341,8 +431,9 @@ def test_assemble_demotes_body_headings_to_anchor_level(tmp_path: Path, monkeypa
     tpl = ws / "标书模板.docx"
     doc = Document()
     doc.add_paragraph("第五章 响应文件组成")
-    for title in ("一、磋商响应声明", "六、项目实施方案", "七、合同条款偏离表"):
-        doc.add_heading(title, level=2)
+    for title, level in (("一、磋商响应声明", 2), ("六、项目实施方案", 1),
+                         ("七、合同条款偏离表", 2)):
+        doc.add_heading(title, level=level)
         doc.add_paragraph(f"{title} 模板正文。")
     doc.save(tpl)
     parts = st.split_template_node(
@@ -352,13 +443,44 @@ def test_assemble_demotes_body_headings_to_anchor_level(tmp_path: Path, monkeypa
     body = d / "05_body"
     body.mkdir(parents=True)
     (body / "body.md").write_text(
-        "# 1 总体思路\n\n总体内容。\n\n## 1.1 实施要点\n\n要点内容。", encoding="utf-8")
+        "# 总体思路\n\n总体内容。\n\n## 实施要点\n\n### 进度安排\n\n安排内容。", encoding="utf-8")
     state = BidState(run_id="run-1", body_md_path=str(body / "body.md"),
                      template_docx_path=str(tpl), template_parts=parts,
                      forms_docx_path="", deviation_docx_path="")
     updates = asm.assemble_node(state)
-    doc2 = Document(updates["draft_docx_path"])
-    styles = {p.text.strip(): p.style.name for p in doc2.paragraphs if p.text.strip()}
-    assert styles["1 总体思路"] == "Heading 2"          # H1 → 锚点级
-    assert styles["1.1 实施要点"] == "Heading 3"        # H2 → 锚点+1
-    assert styles["六、项目实施方案"] == "Heading 2"     # 宿主锚点不动
+    styles = {p.text.strip(): p.style.name
+              for p in Document(updates["draft_docx_path"]).paragraphs if p.text.strip()}
+    assert styles["1. 总体思路"] == "Heading 1"
+    assert styles["1.1 实施要点"] == "Heading 2"
+    assert styles["1.1.1 进度安排"] == "Heading 3"
+
+
+def test_assemble_renders_table_and_mermaid(tmp_path: Path, monkeypatch):
+    """#79:正文表格渲染为真 docx 表格、mermaid 渲染为图片经关系迁移入壳包。"""
+    import biaoshu_gen.mermaid_render as mr
+
+    from docx.oxml.ns import qn
+
+    _PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+            b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+    monkeypatch.setattr(mr, "render_mermaid_png", lambda code: _PNG)
+
+    state = _state(tmp_path, monkeypatch)
+    Path(state.body_md_path).write_text(
+        "# 总体思路\n\n| 功能 | 描述 |\n|---|---|\n| 统一认证 | 单点登录 |\n\n"
+        "## 实施要点\n\n```mermaid\nflowchart LR\n  A-->B\n```\n\n图：总体流程\n",
+        encoding="utf-8")
+    updates = asm.assemble_node(state)
+    doc = Document(updates["draft_docx_path"])
+
+    cells = [c.text for t in doc.tables for row in t.rows for c in row.cells]
+    assert "统一认证" in cells and "单点登录" in cells            # 真表格在草稿中
+    assert not any("|" in p.text for p in doc.paragraphs)         # 管道文本不残留
+    assert len(doc.inline_shapes) == 1                            # mermaid 图入稿
+    blip = next(doc.element.body.iter(qn("a:blip")))
+    rid = blip.get(qn("r:embed"))
+    assert rid in doc.part.rels                                   # 关系迁移:壳包可解析
+    assert doc.part.rels[rid].target_part.blob == _PNG
+    texts = [p.text for p in doc.paragraphs]
+    assert "图：总体流程" in texts                                 # 图题保留

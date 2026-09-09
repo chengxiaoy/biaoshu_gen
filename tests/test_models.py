@@ -72,3 +72,44 @@ def test_run_sync_gives_up_after_validation_retries(monkeypatch):
     with pytest.raises(UnexpectedModelBehavior):
         run_sync(_Agent(), "p")
     assert len(calls) == _VALIDATION_RETRIES
+
+
+def test_run_sync_retries_on_malformed_response_body(monkeypatch):
+    """HTTP 200 但响应体损坏(openrouter 免费档实测:JSON 截断在 char 1100)按瞬态
+    重试——pydantic-ai 只包装 APIStatusError/APIConnectionError,JSONDecodeError
+    裸穿重试网曾炸穿 review 阶段(2026-09-08 run-20260908-215413)。"""
+    import json
+
+    from biaoshu_gen.models import run_sync
+
+    calls = []
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    class _Out:
+        def model_dump_json(self, indent=None):
+            return "{}"
+
+    class _R:
+        output = _Out()
+
+    class _Agent:
+        output_type = GlobalFacts
+
+        def run_sync(self, prompt):
+            calls.append(prompt)
+            if len(calls) == 1:
+                raise json.JSONDecodeError("Expecting value", "{}\n{", 3)
+            return _R()
+
+    result = run_sync(_Agent(), "p")
+    assert len(calls) == 2                       # 同一 prompt 重发,不炸穿节点
+    assert result.output.model_dump_json() == "{}"
+
+
+def test_malformed_body_counts_as_transient():
+    """JSONDecodeError 必须在瞬态错误族内,否则 run_sync 的 except 网接不住。"""
+    import json
+
+    from biaoshu_gen.models import _TRANSIENT_ERRORS
+
+    assert json.JSONDecodeError in _TRANSIENT_ERRORS

@@ -81,6 +81,76 @@ def test_markdown_to_docx_style_fallback():
     assert "要点一" in texts and "步骤一" in texts and "某标题" in texts
 
 
+_MIN_PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+            b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+
+
+def test_markdown_table_becomes_docx_table():
+    """#79:正文管道表格须渲染为真 docx 表格,不能落为竖线纯文本段落。"""
+    markdown_to_docx(doc := Document(),
+                     "# 系统功能\n\n| 功能 | 描述 |\n|---|---|\n"
+                     "| 统一认证 | 单点登录 |\n| 监测告警 | 阈值触发 |\n\n正文说明。")
+    assert len(doc.tables) == 1
+    t = doc.tables[0]
+    assert [c.text for c in t.rows[0].cells] == ["功能", "描述"]
+    assert [c.text for c in t.rows[1].cells] == ["统一认证", "单点登录"]
+    assert t.rows[2].cells[1].text == "阈值触发"
+    texts = [p.text for p in doc.paragraphs]
+    assert not any("|" in x for x in texts)            # 管道行不再进段落
+    assert "正文说明。" in texts and "系统功能" in texts
+
+
+def test_markdown_table_without_separator_stays_text():
+    """孤竖线行(无 |---| 分隔行)不是表格,保持原样为段落,不误建表。"""
+    doc = Document()
+    markdown_to_docx(doc, "| 孤行 | 不是表格 |\n")
+    assert len(doc.tables) == 0
+    assert [p.text for p in doc.paragraphs] == ["| 孤行 | 不是表格 |"]
+
+
+def test_markdown_mermaid_renders_picture(monkeypatch):
+    """#79:mermaid 围栏须经渲染器出图并 add_picture 入文档,代码不再落为段落。"""
+    import biaoshu_gen.mermaid_render as mr
+
+    monkeypatch.setattr(mr, "render_mermaid_png", lambda code: _MIN_PNG)
+    doc = Document()
+    markdown_to_docx(doc, "# 流程\n\n```mermaid\nflowchart LR\n  A-->B\n```\n\n图：总体流程\n")
+    assert len(doc.inline_shapes) == 1
+    blip = next(doc.element.body.iter(qn("a:blip")))
+    rid = blip.get(qn("r:embed"))
+    assert doc.part.rels[rid].target_part.blob == _MIN_PNG     # 图片字节已入包
+    texts = [p.text for p in doc.paragraphs]
+    assert not any("flowchart" in x for x in texts)            # 代码文本不再出现
+    assert "图：总体流程" in texts                              # 图题保留
+
+
+def test_markdown_mermaid_degrades_to_code_text(monkeypatch):
+    """渲染环境不可用(返回 None)时降级为代码文本段落,内容不丢、不崩溃。"""
+    import biaoshu_gen.mermaid_render as mr
+
+    monkeypatch.setattr(mr, "render_mermaid_png", lambda code: None)
+    doc = Document()
+    markdown_to_docx(doc, "```mermaid\nflowchart LR\n  A-->B\n```\n")
+    assert len(doc.inline_shapes) == 0
+    assert any("flowchart LR" in x.text for x in doc.paragraphs)
+
+
+def test_number_headings_three_levels():
+    """#80:三级目录加章节号——#→1. / ##→1.1 / ###→1.1.1,同级递增、升级清零。"""
+    from biaoshu_gen.docx_io import number_headings
+
+    md = ("# 总体方案\n\n正文。\n\n## 实施要点\n\n### 进度安排\n\n- 要点\n\n"
+          "## 保障措施\n\n# 应急预案\n")
+    out = number_headings(md)
+    assert "# 1. 总体方案" in out
+    assert "## 1.1 实施要点" in out
+    assert "### 1.1.1 进度安排" in out
+    assert "## 1.2 保障措施" in out
+    assert "# 2. 应急预案" in out
+    assert "正文。" in out and "- 要点" in out          # 非标题行原样保留
+
+
 def test_template_has_section(tmp_path: Path):
     from biaoshu_gen.docx_io import template_has_section
 
@@ -351,3 +421,146 @@ def test_clip_docx_keep_multiple_ranges(tmp_path: Path):
     texts = [p.text for p in Document(str(dest)).paragraphs]
     assert texts == ["一、磋商响应声明", "七、合同条款偏离表", "八、采购需求偏离表"]
     assert Document(str(dest)).element.body.sectPr is not None
+
+
+def test_markdown_table_has_explicit_borders():
+    """#81:表格样式不能只靠 tblStyle 引用——真实模板 styleId 体系不同(数字
+    自编号)会让 TableGrid 引用悬空,Word 里表格无边框。边框须作为直接格式
+    (w:tblBorders)写进表格,随元素跨包搬运,不依赖宿主包样式表。"""
+    from docx.oxml.ns import qn
+
+    doc = Document()
+    markdown_to_docx(doc, "| a | b |\n|---|---|\n| 1 | 2 |\n")
+    tblPr = doc.tables[0]._tbl.tblPr
+    borders = tblPr.find(qn("w:tblBorders"))
+    assert borders is not None, "缺 w:tblBorders 直接格式"
+    edges = {c.tag.split("}")[-1] for c in borders}
+    assert {"top", "left", "bottom", "right", "insideH", "insideV"} <= edges
+
+
+def test_retarget_style_ids_maps_by_name_to_host_id():
+    """#81 续:scratch 样式引用(Heading1)在 styleId 体系不同的宿主包解析不到——
+    标题塌成正文格式。搬运前须按解析名对位宿主 styleId(真实模板实测:
+    标题样式名 Heading 1,styleId 却是 '2')。"""
+    import copy as _copy
+
+    from biaoshu_gen.docx_io import retarget_style_ids
+
+    dest = Document()
+    dest.add_heading("宿主", level=1)
+    dest.styles["Heading 1"].style_id = "2"            # 模拟真实模板数字自编号
+    import tempfile
+
+    dest.save(p := tempfile.mktemp(suffix=".docx"))
+    dest = Document(p)
+
+    src = Document()
+    h = src.add_heading("注入标题", level=1)            # pStyle val=Heading1
+    el = _copy.deepcopy(h._p)
+    retarget_style_ids([el], src, dest)
+    assert el.find(qn("w:pPr")).find(qn("w:pStyle")).get(qn("w:val")) == "2"
+
+
+def test_retarget_style_ids_skips_resolvable_and_unmatched():
+    """宿主已认识该 id → 不动(保护模板自带/fill 产物);名字对不上且无标题级
+    对位 → 保持原值(outlineLvl 直写已兜底级别)。"""
+    import copy as _copy
+
+    from biaoshu_gen.docx_io import retarget_style_ids
+
+    dest = Document()
+    dest.add_heading("宿主", level=1)
+    src = Document()
+    h1 = src.add_heading("同id可解析", level=1)         # Heading1 在 dest 可解析
+    el1 = _copy.deepcopy(h1._p)
+    retarget_style_ids([el1], src, dest)
+    assert el1.find(qn("w:pPr")).find(qn("w:pStyle")).get(qn("w:val")) == "Heading1"
+
+    h2 = src.add_paragraph("x", style="Quote")          # Quote 在 dest 无同名/无级对位
+    el2 = _copy.deepcopy(h2._p)
+    retarget_style_ids([el2], src, dest)
+    assert el2.find(qn("w:pPr")).find(qn("w:pStyle")).get(qn("w:val")) == "Quote"
+
+
+def test_retarget_style_ids_falls_back_to_outline_level():
+    """宿主标题样式名不同(如自定义名)但定义了 outlineLvl → Heading N 按级别
+    对位(动态阅读宿主样式体系的兜底路径)。"""
+    import copy as _copy
+
+    from docx.enum.style import WD_STYLE_TYPE
+
+    from biaoshu_gen.docx_io import retarget_style_ids
+
+    dest = Document()
+    el = dest.styles["Heading 1"].element            # 移除同名样式,隔离级别对位路径
+    el.getparent().remove(el)
+    st = dest.styles.add_style("方案章节标题", WD_STYLE_TYPE.PARAGRAPH)
+    pPr = st.element.get_or_add_pPr()
+    ol = OxmlElement("w:outlineLvl")
+    ol.set(qn("w:val"), "0")
+    pPr.append(ol)                                      # 一级标题(outlineLvl 0)
+    src = Document()
+    h = src.add_heading("注入标题", level=1)            # Heading1 → 级别对位
+    el = _copy.deepcopy(h._p)
+    retarget_style_ids([el], src, dest)
+    assert el.find(qn("w:pPr")).find(qn("w:pStyle")).get(qn("w:val")) == \
+        dest.styles["方案章节标题"].style_id
+
+
+def _make_png(width_px: int, height_px: int) -> bytes:
+    """程序化生成合法 PNG(IHDR+zlib 扫描线),用于构造已知宽高比的竖版长图。"""
+    import struct
+    import zlib
+
+    def chunk(typ: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + typ + data
+                + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF))
+
+    raw = b"".join(b"\x00" + b"\xff" * (width_px * 3) for _ in range(height_px))
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width_px, height_px, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"IEND", b""))
+
+
+def test_mermaid_tall_picture_scaled_by_height(monkeypatch):
+    """竖版长图按宽度缩放会超页高,Word 只显示上半——按高度封顶等比缩小显示全图。"""
+    from docx.shared import Inches
+
+    import biaoshu_gen.mermaid_render as mr
+
+    monkeypatch.setattr(mr, "render_mermaid_png", lambda code: _make_png(400, 3000))
+    doc = Document()
+    markdown_to_docx(doc, "```mermaid\nflowchart TD\n  A-->B\n```\n")
+    shape = doc.inline_shapes[0]
+    assert shape.height <= Inches(8.0)                 # 不超出可排版页高
+    assert abs(shape.width / shape.height - 400 / 3000) < 0.01   # 等比,不变形
+
+
+def test_ensure_style_fallbacks_synthesizes_missing_heading_style():
+    """retarget 映射不到的悬空标题引用:在宿主 styles.xml 合成最小标题样式
+    (加粗+级别字号+outlineLvl),标题不再以正文外观显示。"""
+    import copy as _copy
+
+    from biaoshu_gen.docx_io import (
+        _find_style_by_id, ensure_style_fallbacks, retarget_style_ids,
+    )
+
+    src = Document()
+    markdown_to_docx(src, "# 注入\n")                  # 走真实渲染链路(带段落 outlineLvl)
+    dest = Document()
+    el = dest.styles["Heading 1"].element
+    el.getparent().remove(el)                          # 宿主无 Heading 1:retarget 失败
+    els = [_copy.deepcopy(c) for c in src.element.body.iterchildren()
+           if not c.tag.endswith("}sectPr")]
+    retarget_style_ids(els, src, dest)
+    ensure_style_fallbacks(els, src, dest)
+
+    style = _find_style_by_id(dest, "Heading1")
+    assert style is not None                           # 悬空 id 已在宿主包合成
+    assert style.name == "Heading 1"
+    rPr = style.element.find(qn("w:rPr"))
+    assert rPr is not None and rPr.find(qn("w:b")) is not None
+    assert rPr.find(qn("w:sz")).get(qn("w:val")) == "32"   # 16pt(半磅单位)
+    lvl = style.element.find(qn("w:pPr")).find(qn("w:outlineLvl"))
+    assert lvl.get(qn("w:val")) == "0"

@@ -230,3 +230,20 @@ def test_stage_completion_backs_up_checkpoint(tmp_path: Path, monkeypatch):
     latest = (tmp_path / "data" / "runs" / ".latest").read_text(encoding="utf-8").strip()
     ck = tmp_path / "data" / "runs" / latest / "checkpoints" / "parse.sqlite"
     assert ck.exists() and ck.stat().st_size > 0
+
+
+def test_main_hard_exits_on_failure_path(monkeypatch):
+    """失败路径(typer Exit -> SystemExit)也须硬退出:Windows 上未关闭的 asyncio
+    IOCP 循环挂死解释器关停——成功路径已有 os._exit,失败路径曾漏,实测失败后
+    进程挂 ~5 分钟才吐 Proactor WinError 6(run-20260908-215413)。"""
+    import contextlib
+    import os as _os
+    import sys as _sys
+
+    exits = []
+    monkeypatch.setattr(_os, "_exit", lambda code: exits.append(code))
+    monkeypatch.setattr(cli, "app", lambda: (_ for _ in ()).throw(SystemExit(1)))
+
+    with contextlib.suppress(SystemExit):      # 非 Windows 走正常 raise
+        cli.main()
+    assert exits == ([1] if _sys.platform == "win32" else [])

@@ -1,4 +1,5 @@
 """PydanticAI Agent 工厂：任意 OpenAI 兼容端点（配置见 config，协议与 harness 三件套独立）。"""
+import json
 import logging
 import os
 import time
@@ -18,8 +19,12 @@ from .config import get_settings, runs_root
 log = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT_S = 600.0   # 长 prompt + 慢模型（免费档）需要充裕超时
-# pydantic-ai 会把 openai 的连接/超时/限流错误包装成 ModelAPIError 抛出，故须一并捕获
-_TRANSIENT_ERRORS = (ModelAPIError, APIConnectionError, APITimeoutError, RateLimitError)
+# pydantic-ai 会把 openai 的连接/超时/限流错误包装成 ModelAPIError 抛出，故须一并捕获。
+# json.JSONDecodeError：HTTP 200 但响应体损坏/截断（openrouter 免费档实测，
+# run-20260908-215413 review 阶段 JSON 截断在 char 1100）——pydantic-ai 只包装
+# APIStatusError/APIConnectionError，裸 JSONDecodeError 曾炸穿重试网致阶段失败
+_TRANSIENT_ERRORS = (ModelAPIError, APIConnectionError, APITimeoutError, RateLimitError,
+                     json.JSONDecodeError)
 _TRANSIENT_RETRIES = 4
 # UnexpectedModelBehavior=agent 内部重采样(retries)用尽仍校验不过——确定性错误,
 # 指数退避无益(同 prompt 大概率同输出),短延迟快速重试即可(fill 大 prompt 节点最坏省 ~70s 白等)

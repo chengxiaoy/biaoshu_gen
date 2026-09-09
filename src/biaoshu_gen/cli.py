@@ -331,12 +331,22 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, stream=sys.stderr,
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    app()
-    # 成功到达此处即全部工作已完成(失败路径在 typer 内部以非零码 sys.exit,
-    # 不会落到这行):绕过解释器关停——Windows 上未关闭的 asyncio IOCP 循环
-    # 在 __del__→close→_poll 会永久挂死(py-spy 实证),曾致"完成后进程不退、
-    # 流水线卡住"。显式冲刷两路输出再硬退出;非 Windows 无此症,走正常关停。
-    sys.stdout.flush()
-    sys.stderr.flush()
-    if sys.platform == "win32":
-        os._exit(0)
+
+    def _hard_exit(code: int) -> None:
+        # 绕过解释器关停——Windows 上未关闭的 asyncio IOCP 循环在 __del__→close→
+        # _poll 会永久挂死(py-spy 实证),曾致"完成后进程不退、流水线卡住"。
+        # 显式冲刷两路输出再硬退出;非 Windows 无此症,走正常关停。
+        sys.stdout.flush()
+        sys.stderr.flush()
+        if sys.platform == "win32":
+            os._exit(code)
+        raise SystemExit(code)
+
+    try:
+        app()
+    except SystemExit as e:
+        # 失败路径(typer Exit(1)/abort)同样绕过关停:2026-09-08 实测阶段失败后
+        # 进程挂 ~5 分钟才吐 Proactor "WinError 6 句柄无效" 噪音
+        _hard_exit(e.code if isinstance(e.code, int) else (0 if e.code is None else 1))
+    # 成功到达此处即全部工作已完成
+    _hard_exit(0)

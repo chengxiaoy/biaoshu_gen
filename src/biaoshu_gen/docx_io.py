@@ -104,29 +104,369 @@ def _add_styled(doc: DocumentType, text: str, style: str):
         return doc.add_paragraph(text)
 
 
-def markdown_to_docx(doc: DocumentType, md: str, heading_offset: int = 0) -> None:
-    """极量版 Markdown → docx：标题/列表/段落（POC 够用）。
+_FENCE_RE = re.compile(r"^```(\w*)\s*$")
+_HEADING_MD_RE = re.compile(r"^(#{1,4})\s+(.*)$")
 
-    heading_offset:标题整体降级偏移(注入宿主文档时按锚点层级对齐,
-    如锚为 Heading2 则正文 # → Heading2)。
+
+def _is_table_sep(s: str) -> bool:
+    """markdown 表格分隔行：只含 |:- 与空白，且至少有一个 - 和一个 |。"""
+    return bool(s) and set(s) <= set("|:- ") and "-" in s and "|" in s
+
+
+def _md_blocks(md: str) -> list[tuple]:
+    """把 markdown 切成块：('heading', depth, text) / ('table', rows) /
+    ('mermaid', code) / ('line', s)。
+
+    围栏优先识别——围栏内行不再按标题/表格/列表解析（mermaid 代码含
+    "A-->B" 等任意文本）；分隔行缺失的孤竖线行不算表格，保持段落原样。
     """
+    lines = md.splitlines()
+    blocks: list[tuple] = []
+    i = 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if not s:
+            i += 1
+            continue
+        m = _HEADING_MD_RE.match(s)
+        if m:
+            blocks.append(("heading", len(m.group(1)), m.group(2)))
+            i += 1
+            continue
+        m = _FENCE_RE.match(s)
+        if m:
+            lang, code_lines = m.group(1).lower(), []
+            i += 1
+            while i < len(lines) and not _FENCE_RE.match(lines[i].strip()):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1                              # 跳过收尾围栏（EOF 缺围栏也接受）
+            if lang == "mermaid":
+                blocks.append(("mermaid", "\n".join(code_lines).strip()))
+            else:
+                blocks.extend(("line", ln.strip()) for ln in code_lines if ln.strip())
+            continue
+        if s.startswith("|") and i + 1 < len(lines) and _is_table_sep(lines[i + 1].strip()):
+            rows: list[list[str]] = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                rows.append([c.strip() for c in lines[i].strip().strip("|").split("|")])
+                i += 1
+            rows.pop(1)                         # 分隔行不入表
+            blocks.append(("table", rows))
+            continue
+        blocks.append(("line", s))
+        i += 1
+    return blocks
+
+
+def _set_table_borders(table) -> None:
+    """表格边框作为直接格式写入（#81）：tblStyle 引用在 styleId 体系不同的
+    宿主包（真实模板数字自编号）会悬空，Word 里表格裸奔无边框；直接格式
+    随元素跨包搬运，不依赖宿主样式表。"""
+    from docx.oxml import OxmlElement
+
+    tblPr = table._tbl.tblPr
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = OxmlElement(f"w:{edge}")
+        el.set(qn("w:val"), "single")
+        el.set(qn("w:sz"), "4")                  # 0.5pt
+        el.set(qn("w:color"), "auto")
+        borders.append(el)
+    # OOXML tblPr 子元素序：tblBorders 在 shd/tblLayout/tblLook 之前
+    anchor = next((c for c in tblPr.iterchildren()
+                   if c.tag in (qn("w:shd"), qn("w:tblLayout"), qn("w:tblCellMar"),
+                                qn("w:tblLook"))), None)
+    if anchor is not None:
+        anchor.addprevious(borders)
+    else:
+        tblPr.append(borders)
+
+
+def _add_md_table(doc: DocumentType, rows: list[list[str]]) -> None:
+    """管道表格 → 真 docx 表格（#79）：表头加粗；显式边框（#81）+Table Grid
+    样式引用（宿主包有同名样式时叠加格式，缺失不影响边框）。"""
+    if not rows:
+        return
+    cols = max(len(r) for r in rows)
+    table = doc.add_table(rows=len(rows), cols=cols)
+    _set_table_borders(table)
+    try:
+        table.style = "Table Grid"
+    except KeyError:
+        pass
+    for ri, row in enumerate(rows):
+        for ci in range(cols):
+            cell = table.cell(ri, ci)
+            cell.text = row[ci] if ci < len(row) else ""
+            if ri == 0:
+                for p in cell.paragraphs:
+                    for r in p.runs:
+                        r.font.bold = True
+
+
+_PICTURE_WIDTH_IN = 5.8         # 正文插图目标宽（等比缩放）
+_PICTURE_MAX_HEIGHT_IN = 8.0    # 竖版长图按高度封顶（A4/Letter 排版区内），否则 Word 裁掉页外部分
+
+
+def _add_mermaid(doc: DocumentType, code: str) -> None:
+    """mermaid 代码块 → 渲染 PNG 插图（#79）；渲染不可用时降级为代码文本段落。
+
+    默认按宽度等比缩放；图高超出页高时 Word 只显示上半——按高度封顶等比
+    缩小，保证全图可见。
+    """
+    from io import BytesIO
+
+    from docx.shared import Inches
+
+    try:
+        from .mermaid_render import render_mermaid_png
+        png = render_mermaid_png(code)
+    except Exception:                           # 渲染是锦上添花，任何异常都降级
+        png = None
+    if png:
+        shape = doc.add_picture(BytesIO(png), width=Inches(_PICTURE_WIDTH_IN))
+        max_h = Inches(_PICTURE_MAX_HEIGHT_IN)
+        if shape.height > max_h:
+            scale = max_h / shape.height
+            shape.height = int(shape.height * scale)
+            shape.width = int(shape.width * scale)
+        return
+    for ln in code.splitlines():
+        if ln.strip():
+            doc.add_paragraph(ln)
+
+
+_HEADING_STYLE_NAME_RE = re.compile(r"^(?:Heading|标题)\s*(\d)$", re.IGNORECASE)
+
+
+def _find_style_by_id(doc: DocumentType, style_id: str):
+    for s in doc.styles:
+        if s.style_id == style_id:
+            return s
+    return None
+
+
+def _style_outline_level(style) -> int | None:
+    """样式定义内声明的大纲级别（w:style/w:pPr/w:outlineLvl，0-based）。"""
+    pPr = style.element.find(qn("w:pPr"))
+    if pPr is None:
+        return None
+    el = pPr.find(qn("w:outlineLvl"))
+    try:
+        return int(el.get(qn("w:val"))) if el is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _map_style_id(old_id: str, src_doc: DocumentType, dest_doc: DocumentType,
+                  kind: str) -> str | None:
+    """把 src 包 styleId 语义对位到 dest 包：返回 None 表示保持原值。
+
+    ①dest 已认识该 id（模板自带/fill 产物同族）→ 不动最稳；②解析名相同；
+    ③Heading N/标题 N 按大纲级别对位宿主标题样式（仅段落样式，真实标书
+    模板标题体系 styleId 常是数字自编号，run-20260908-215413 实测）。
+    """
+    if _find_style_by_id(dest_doc, old_id) is not None:
+        return None
+    src_style = _find_style_by_id(src_doc, old_id)
+    if src_style is None:
+        return None
+    name = src_style.name
+    try:
+        return dest_doc.styles[name].style_id
+    except KeyError:
+        pass
+    if kind == "p":
+        m = _HEADING_STYLE_NAME_RE.match(name or "")
+        if m:
+            want = int(m.group(1)) - 1
+            from docx.enum.style import WD_STYLE_TYPE
+
+            cands = [s for s in dest_doc.styles
+                     if s.type == WD_STYLE_TYPE.PARAGRAPH
+                     and _style_outline_level(s) == want]
+            if len(cands) == 1:
+                return cands[0].style_id
+            named = [s for s in cands
+                     if re.search(r"标题|heading", s.name or "", re.IGNORECASE)]
+            if named:
+                return named[0].style_id
+    return None
+
+
+def retarget_style_ids(elements: list, src_doc: DocumentType,
+                       dest_doc: DocumentType) -> None:
+    """跨包搬运前把元素引用的 pStyle/tblStyle 重定到宿主包 styleId（#81 续）。
+
+    scratch 渲染产物的样式引用（Heading1/TableGrid）在 styleId 体系不同的
+    宿主标书模板里解析不到——标题塌成正文格式、表格丢样式。按样式语义
+    （解析名/大纲级别）动态读取宿主样式表对位，映射不到保持原值。
+    """
+    cache: dict[tuple[str, str], str | None] = {}
+    for el in elements:
+        for node in el.iter():
+            if node.tag == qn("w:pStyle"):
+                kind, old = "p", node.get(qn("w:val"))
+            elif node.tag == qn("w:tblStyle"):
+                kind, old = "tbl", node.get(qn("w:val"))
+            else:
+                continue
+            if not old:
+                continue
+            key = (kind, old)
+            if key not in cache:
+                cache[key] = _map_style_id(old, src_doc, dest_doc, kind)
+            if cache[key]:
+                node.set(qn("w:val"), cache[key])
+
+
+# 合成兜底标题样式的级别字号（半磅）：H1 16pt / H2 14pt / H3 13pt / H4 12pt
+_FALLBACK_HEADING_SIZE_HP = {1: 32, 2: 28, 3: 26, 4: 24}
+
+
+def ensure_style_fallbacks(elements: list, src_doc: DocumentType,
+                           dest_doc: DocumentType) -> None:
+    """retarget 后仍悬空的标题引用：在宿主 styles.xml 合成最小标题样式兜底。
+
+    宿主既无同名样式也无级别对位样式时（探测不到的最后一层），按悬空 id
+    合成段落样式——加粗 + 级别字号 + outlineLvl，字体继承模板默认（中文标书
+    观感），标题不再以正文外观显示。悬空 id 本就是宿主空闲 id，无冲突。
+    """
+    from docx.oxml import OxmlElement
+
+    dangling: dict[str, tuple[str, int]] = {}       # styleId -> (样式名, 级别)
+    for el in elements:
+        if not el.tag == qn("w:p"):
+            continue
+        pPr = el.find(qn("w:pPr"))
+        if pPr is None:
+            continue
+        p_style = pPr.find(qn("w:pStyle"))
+        if p_style is None:
+            continue
+        val = p_style.get(qn("w:val"))
+        if not val or _find_style_by_id(dest_doc, val) is not None or val in dangling:
+            continue
+        src_style = _find_style_by_id(src_doc, val)
+        name = (src_style.name if src_style is not None else None) or val
+        level = None
+        outline = pPr.find(qn("w:outlineLvl"))      # 段落直写级别优先
+        if outline is not None:
+            try:
+                level = int(outline.get(qn("w:val"))) + 1
+            except (TypeError, ValueError):
+                level = None
+        if level is None and src_style is not None:  # 回退:源样式定义内的级别
+            src_lvl = _style_outline_level(src_style)
+            level = src_lvl + 1 if src_lvl is not None else None
+        if level is None:
+            continue
+        dangling[val] = (name, level)
+    styles_el = dest_doc.styles.element
+    for val, (name, level) in dangling.items():
+        style = OxmlElement("w:style")
+        style.set(qn("w:type"), "paragraph")
+        style.set(qn("w:styleId"), val)
+        style_name = OxmlElement("w:name")
+        style_name.set(qn("w:val"), name)
+        style.append(style_name)
+        style.append(OxmlElement("w:qFormat"))
+        pPr = OxmlElement("w:pPr")
+        outline = OxmlElement("w:outlineLvl")
+        outline.set(qn("w:val"), str(level - 1))
+        pPr.append(outline)
+        style.append(pPr)
+        rPr = OxmlElement("w:rPr")
+        rPr.append(OxmlElement("w:b"))
+        sz = OxmlElement("w:sz")
+        sz.set(qn("w:val"), str(_FALLBACK_HEADING_SIZE_HP.get(level, 24)))
+        rPr.append(sz)
+        style.append(rPr)
+        styles_el.append(style)
+
+
+def _set_outline_level(para, level: int) -> None:
+    """直接写段落大纲级别 w:outlineLvl(0-based,#80 通用解法)。
+
+    真实标书模板的 styleId 常是数字自编号,注入段落的 pStyle(如 Heading4)在
+    宿主包解析不到会塌回 Normal——级别写在段落属性上,不依赖 pStyle 能否解析,
+    Word 导航窗格/目录照常识别。
+    """
+    from docx.oxml import OxmlElement
+
+    pPr = para._p.get_or_add_pPr()
+    el = pPr.find(qn("w:outlineLvl"))
+    if el is None:
+        el = OxmlElement("w:outlineLvl")
+        anchor = next((c for c in pPr.iterchildren()
+                       if c.tag in (qn("w:rPr"), qn("w:sectPr"), qn("w:pPrChange"))), None)
+        if anchor is not None:
+            anchor.addprevious(el)              # OOXML pPr 子元素序:outlineLvl 靠后
+        else:
+            pPr.append(el)
+    el.set(qn("w:val"), str(min(level - 1, 8)))
+
+
+def number_headings(md: str) -> str:
+    """给 markdown 标题加章节号（#80）：#→"1. 标题"、##→"1.1 标题"、
+    ###→"1.1.1 标题"——同级递增、升级清零,编号深度恒等于标题层级。
+
+    锚点只决定注入落点,不改变编号(按锚降级曾致编号 1.1.1.1 爆炸,
+    run-20260908-215413 实证)。围栏内行跳过;非标题行原样保留。
+    """
+    counters = [0] * 5
+    out: list[str] = []
+    in_fence = False
     for line in md.splitlines():
         s = line.strip()
-        if not s:
+        if s.startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
             continue
-        m = re.match(r"^(#{1,4})\s+(.*)$", s)
-        if m:
-            level = max(1, min(4, len(m.group(1)) + heading_offset))
+        if in_fence:
+            out.append(line)
+            continue
+        m = _HEADING_MD_RE.match(s)
+        if not m:
+            out.append(line)
+            continue
+        depth = len(m.group(1))
+        counters[depth] += 1
+        for i in range(depth + 1, 5):
+            counters[i] = 0
+        segs = [str(counters[i]) for i in range(1, depth + 1)]
+        number = ".".join(segs) + ("." if len(segs) == 1 else "")
+        out.append(f"{'#' * depth} {number} {m.group(2).strip()}")
+    return "\n".join(out)
+
+
+def markdown_to_docx(doc: DocumentType, md: str, heading_offset: int = 0) -> None:
+    """极量版 Markdown → docx：标题/列表/段落/表格/mermaid 渲染插图。
+
+    heading_offset:标题整体降级偏移(仅渲染层能力;assemble 注入不再降级,
+    级别由 outlineLvl 直写保证)。
+    """
+    for block in _md_blocks(md):
+        if block[0] == "heading":
+            level = max(1, min(4, block[1] + heading_offset))
             try:
-                doc.add_heading(m.group(2), level=level)
-            except KeyError:                      # 模板缺 Heading N 样式时回退
-                doc.add_paragraph(m.group(2))
-        elif s.startswith(("- ", "* ")):
-            _add_styled(doc, s[2:], "List Bullet")
-        elif re.match(r"^\d+\.\s+", s):
-            _add_styled(doc, re.sub(r"^\d+\.\s+", "", s), "List Number")
+                para = doc.add_heading(block[2], level=level)
+            except KeyError:                    # 模板缺 Heading N 样式时回退
+                para = doc.add_paragraph(block[2])
+            _set_outline_level(para, level)
+        elif block[0] == "table":
+            _add_md_table(doc, block[1])
+        elif block[0] == "mermaid":
+            _add_mermaid(doc, block[1])
         else:
-            doc.add_paragraph(re.sub(r"\*\*(.+?)\*\*", r"\1", s))
+            s = block[1]
+            if s.startswith(("- ", "* ")):
+                _add_styled(doc, s[2:], "List Bullet")
+            elif re.match(r"^\d+\.\s+", s):
+                _add_styled(doc, re.sub(r"^\d+\.\s+", "", s), "List Number")
+            else:
+                doc.add_paragraph(re.sub(r"\*\*(.+?)\*\*", r"\1", s))
 
 
 def copy_docx(src: Path, dest: Path) -> DocumentType:

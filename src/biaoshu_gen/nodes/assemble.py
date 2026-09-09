@@ -21,7 +21,8 @@ from docx.oxml.ns import qn
 
 from ..docx_io import (
     adopt_image_rels, append_elements_before_sectpr, body_children_count, copy_docx,
-    docx_block_ranges, iter_block_items, markdown_to_docx, replace_elements,
+    docx_block_ranges, ensure_style_fallbacks, iter_block_items, markdown_to_docx,
+    number_headings, replace_elements, retarget_style_ids,
 )
 from ..state import BidState, run_dir
 from .split_template import load_entries, read_parts_yaml
@@ -42,26 +43,43 @@ def _find_range(ranges, keywords: tuple[str, ...]):
     return None
 
 
-def _inject_technical_body(container: Document, body_md: str) -> bool:
-    """把技术正文注入宿主容器:找到技术锚区间则整段替换,正文标题按锚层级降级
-    (#70:锚 H2 时正文 #→H2、##→H3);找不到锚则尾部追加。返回是否命中锚。"""
+def _inject_technical_body(container: Document, body_md: str,
+                           img_cache: dict | None = None) -> bool:
+    """把技术正文注入宿主容器:找到技术锚区间则整段替换;锚点只决定落点,
+    正文标题恒为 H1/H2/H3、章节号恒为 1./1.1/1.1.1(#80 2026-09-09 修订——
+    按锚降级曾致编号 1.1.1.1 爆炸+级别全钳 H4),大纲级别经 w:outlineLvl
+    直写保证(pStyle 在真实模板 styleId 体系下可能解析不到);表格/mermaid
+    渲染后并入(#79),插图关系随搬运迁移。找不到锚返回 False。"""
     tech = _find_range(docx_block_ranges(container), _TECH_KEYWORDS)
     if tech is None:
         return False
-    offset = max(tech.level - 1, 0)
-    replace_elements(tech.elements[1:], _content_elements(body_md, heading_offset=offset))
+    scratch, elements = _content_elements(number_headings(body_md))
+    retarget_style_ids(elements, scratch, container)   # 标题/表格样式对位宿主样式表
+    ensure_style_fallbacks(elements, scratch, container)   # 仍悬空的标题合成兜底样式
+    if len(tech.elements) > 1:
+        replace_elements(tech.elements[1:], elements, dest_doc=container,
+                         src_doc=scratch, img_cache=img_cache)
+    else:
+        # 锚即区间尾(切片只有标题、无内容元素):replace_elements 对空区间是
+        # no-op,正文会整体静默丢失——改为插在锚标题之后
+        adopt_image_rels(container, scratch, elements, img_cache)
+        anchor = tech.elements[0]
+        for el in reversed(elements):
+            anchor.addnext(_copy.deepcopy(el))
     return True
 
 
-def _content_elements(md: str, heading_offset: int = 0) -> list:
-    """把 markdown 渲染到临时文档，返回其 body 元素（不含 sectPr）。
+def _content_elements(md: str) -> tuple[Document, list]:
+    """把 markdown 渲染到临时文档，返回 (scratch 文档, body 元素不含 sectPr)。
 
-    heading_offset:标题按宿主锚点层级降级(#70 目录层级保证)。
+    返回 scratch 是为了搬运后把其中插图(mermaid 渲染 PNG)的关系迁入宿主包,
+    否则 Word 显示空白。
     """
     scratch = Document()
-    markdown_to_docx(scratch, md, heading_offset=heading_offset)
-    return [el for el in scratch.element.body.iterchildren()
-            if el.tag.split("}")[-1] != "sectPr"]
+    markdown_to_docx(scratch, md)
+    elements = [el for el in scratch.element.body.iterchildren()
+                if el.tag.split("}")[-1] != "sectPr"]
+    return scratch, elements
 
 
 def _block_key(block) -> str:
@@ -126,7 +144,7 @@ def _assemble_from_parts(state: BidState, manifest: dict, dest: Path, body_md: s
             if not (container and Path(container).exists()):
                 continue
             part = Document(str(container))            # 技术部分以原始 part 为容器
-            if not body_injected and _inject_technical_body(part, body_md):
+            if not body_injected and _inject_technical_body(part, body_md, img_cache):
                 body_injected = True
             src = part                                 # 多 technical run 后续原样保留
         else:
@@ -153,10 +171,13 @@ def _assemble_from_parts(state: BidState, manifest: dict, dest: Path, body_md: s
             src = src_doc
         elements = [el for el in src.element.body.iterchildren()
                     if el.tag != qn("w:sectPr")]
+        retarget_style_ids(elements, src, doc)     # 进壳一跳:样式对位宿主样式表
+        ensure_style_fallbacks(elements, src, doc)
         append_elements_before_sectpr(doc, elements, src_doc=src, img_cache=img_cache)
     if not body_injected and body_md:                  # 无技术桶时 body 兜底尾部追加
         doc.add_page_break()
-        markdown_to_docx(doc, "# 技术方案\n\n" + body_md)
+        prefix = "" if body_md.lstrip().startswith("#") else "# 技术方案\n\n"
+        markdown_to_docx(doc, number_headings(prefix + body_md))
     doc.save(str(dest))
 
 
@@ -184,15 +205,16 @@ def assemble_node(state: BidState) -> dict:
             doc.add_heading(f"{state.metadata.project_name} 投标文件", level=0)
 
     # 技术方案正文 -> 锚定"技术部分"区间(命中锚按锚层级降级注入;未命中追加尾部)
-    if not _inject_technical_body(doc, body_md):
+    img_cache: dict = {}
+    if not _inject_technical_body(doc, body_md, img_cache):
         doc.add_page_break()
-        markdown_to_docx(doc, "# 技术方案\n\n" + body_md)
+        prefix = "" if body_md.lstrip().startswith("#") else "# 技术方案\n\n"
+        markdown_to_docx(doc, number_headings(prefix + body_md))
 
     # 偏离表 -> 同锚区间整段替换；底稿无该区间则仅追加该区间；再兜底整本去重
     # （商务/表单内容已并入 forms.docx 底稿，不再单独替换）
     from ..fill_context import SECTION_KEYWORDS
 
-    img_cache: dict = {}
     for field, key in (("deviation_docx_path", "deviation"),):
         path = getattr(state, field)
         if not (path and Path(path).exists()):

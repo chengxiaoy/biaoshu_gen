@@ -101,6 +101,39 @@ def render_check(code: str) -> str | None:
     return _extract_error(stderr) or f"exit code {proc.returncode}"
 
 
+def render_mermaid_png(code: str) -> bytes | None:
+    """mermaid 代码渲染为 PNG 字节（assemble 入稿用）；失败返回 None。
+
+    与 render_check 同一环境探针：mermaid_render 关闭、mmdc 缺失、浏览器起
+    不来、超时——一律 None，调用方降级为代码文本，不阻塞装配（锦上添花原则）。
+    """
+    settings = get_settings()
+    exe = _find_mmdc()
+    if not settings.mermaid_render or exe is None:
+        return None
+    with tempfile.NamedTemporaryFile(
+            "w", suffix=".mmd", delete=False, encoding="utf-8") as f:
+        f.write(code)
+        src = Path(f.name)
+    out = src.with_suffix(".png")
+    cmd = [exe, "-i", str(src), "-o", str(out), "-b", "white", "-s", "2"]
+    p_config = _puppeteer_config()
+    if p_config:
+        cmd += ["-p", str(p_config)]
+    try:
+        subprocess.run(
+            cmd, capture_output=True, text=True, timeout=settings.mermaid_render_timeout,
+        )
+        png = out.read_bytes() if out.exists() else None
+    except (subprocess.TimeoutExpired, OSError):
+        png = None
+    finally:
+        for p in (src, out, p_config):
+            if p is not None:
+                p.unlink(missing_ok=True)
+    return png
+
+
 def _extract_error(stderr: str) -> str:
     """提取 mmdc 错误的有效反馈行（Error/源码片段/Expecting），丢弃栈帧与 URL 噪声。"""
     keep: list[str] = []
