@@ -342,9 +342,9 @@ def _write_technical_parts(d: Path, part_docx: Path) -> None:
 
 
 def test_assemble_keeps_body_heading_levels_and_numbers(tmp_path: Path, monkeypatch):
-    """#80(2026-09-09 修订):正文标题恒为 H1/H2/H3、编号恒为 1./1.1/1.1.1——
-    锚点只决定注入落点,不再按锚层级降级(真实模板锚常在格式章深处 H3/H4,
-    降级曾致编号 1.1.1.1 爆炸且级别全钳到 H4,run-20260908-215413 实证)。"""
+    """#83(2026-09-09):编号与层级解耦——编号恒为 1./1.1/1.1.1(#80),层级按锚点
+    挂接(锚 H4 时正文 #→H4/##→H5/###→H6):导航/目录里技术章节嵌在宿主
+    「技术部分>技术方案」之下,不再以顶层章节姿态横插在格式章中间。"""
     monkeypatch.chdir(tmp_path)
     d = run_dir(BidState(run_id="run-1"))
     ws = d / "02_template"
@@ -371,9 +371,9 @@ def test_assemble_keeps_body_heading_levels_and_numbers(tmp_path: Path, monkeypa
     updates = asm.assemble_node(state)
     styles = {p.text.strip(): p.style.name
               for p in Document(updates["draft_docx_path"]).paragraphs if p.text.strip()}
-    assert styles["1. 总体思路"] == "Heading 1"         # H1 恒 H1,编号不随锚变深
-    assert styles["1.1 实施要点"] == "Heading 2"
-    assert styles["1.1.1 进度安排"] == "Heading 3"
+    assert styles["1. 总体思路"] == "Heading 4"         # 级别随锚,编号仍 1.
+    assert styles["1.1 实施要点"] == "Heading 5"
+    assert styles["1.1.1 进度安排"] == "Heading 6"
 
 
 def test_assemble_outline_level_survives_foreign_style_ids(tmp_path: Path, monkeypatch):
@@ -395,8 +395,8 @@ def test_assemble_outline_level_survives_foreign_style_ids(tmp_path: Path, monke
     doc = Document()
     doc.add_paragraph("第五章 响应文件组成")
     doc.add_heading("技术方案", level=4)
-    doc.styles["Heading 1"].style_id = "T1"        # 模拟真实模板数字/自编号 styleId
-    doc.styles["Heading 2"].style_id = "T2"
+    doc.styles["Heading 4"].style_id = "T4"        # 模拟真实模板数字/自编号 styleId
+    doc.styles["Heading 5"].style_id = "T5"
     doc.save(tpl)
     part = d / "02_template" / "技术方案部分.docx"
     part_doc = Document()
@@ -413,11 +413,11 @@ def test_assemble_outline_level_survives_foreign_style_ids(tmp_path: Path, monke
     updates = asm.assemble_node(state)
     paras = {p.text.strip(): p
              for p in Document(updates["draft_docx_path"]).paragraphs if p.text.strip()}
-    assert _outline(paras["1. 总体思路"]) == "0"        # H1 → outlineLvl 0(0-based)
-    assert _outline(paras["1.1 实施要点"]) == "1"       # H2 → outlineLvl 1
+    assert _outline(paras["1. 总体思路"]) == "3"        # 锚 H4:# → outlineLvl 3(0-based)
+    assert _outline(paras["1.1 实施要点"]) == "4"       # ## → outlineLvl 4
     # pStyle 按宿主样式表语义对位后可解析——标题显示样式不再与正文相同
-    assert paras["1. 总体思路"].style.name == "Heading 1"
-    assert paras["1.1 实施要点"].style.name == "Heading 2"
+    assert paras["1. 总体思路"].style.name == "Heading 4"
+    assert paras["1.1 实施要点"].style.name == "Heading 5"
 
 
 def test_assemble_numbers_headings_at_anchor_h1(tmp_path: Path, monkeypatch):
@@ -483,4 +483,4 @@ def test_assemble_renders_table_and_mermaid(tmp_path: Path, monkeypatch):
     assert rid in doc.part.rels                                   # 关系迁移:壳包可解析
     assert doc.part.rels[rid].target_part.blob == _PNG
     texts = [p.text for p in doc.paragraphs]
-    assert "图：总体流程" in texts                                 # 图题保留
+    assert "图1. 总体流程" in texts                                # 图题保留并自动编号

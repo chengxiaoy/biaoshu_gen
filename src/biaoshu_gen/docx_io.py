@@ -441,23 +441,73 @@ def number_headings(md: str) -> str:
     return "\n".join(out)
 
 
+_CAPTION_RE = re.compile(r"^([图表])\s*(?:[：:、.]\s*|\d+\s*[.:、]?\s*|\s+)(.+)$")
+_CAPTION_MAX_LEN = 30          # 裸名词短语题注的长度上限
+_CAPTION_SENTENCE_ENDS = ("。", "！", "？", "；", "：", ":", "!")
+
+
+def _match_caption(text: str, pending: str):
+    """识别媒体块的题注行：返回 (种类, 规整文本) 或 None。
+
+    ①显式前缀（图：xxx / 表1. xxx，rich_body _render_media 的产出形态）；
+    ②裸名词短语（真实 body.md 曾产出「五层纵向贯通架构」形态）——紧随媒体块、
+    ≤30 字、无句末标点、非列表行；句号结尾的正文句不误判。
+    """
+    s = text.strip()
+    m = _CAPTION_RE.match(s)
+    if m:
+        return m.group(1), _strip_caption_number(m.group(2))
+    if (len(s) <= _CAPTION_MAX_LEN
+            and not s.endswith(_CAPTION_SENTENCE_ENDS)
+            and not s.startswith(("-", "*", "+"))
+            and not re.match(r"^\d+\.\s", s)):
+        return pending, s
+    return None
+
+
+def _strip_caption_number(text: str) -> str:
+    """剥掉题注里已有的编号（表1./图2：等），统一由渲染层重编号。"""
+    return re.sub(r"^\d+\s*[.:、．]\s*", "", text.strip()).strip()
+
+
 def markdown_to_docx(doc: DocumentType, md: str, heading_offset: int = 0) -> None:
     """极量版 Markdown → docx：标题/列表/段落/表格/mermaid 渲染插图。
 
-    heading_offset:标题整体降级偏移(仅渲染层能力;assemble 注入不再降级,
-    级别由 outlineLvl 直写保证)。
+    heading_offset:标题整体降级偏移(编号由 number_headings 独立生成,两者解耦)。
+    紧随表格/mermaid 的「图/表」题注行自动编号（表N./图N.,表图独立计数）并
+    水平置中（#82）。
     """
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    table_no = fig_no = 0
+    pending = None                                 # 刚输出的媒体类型,等题注
     for block in _md_blocks(md):
-        if block[0] == "heading":
-            level = max(1, min(4, block[1] + heading_offset))
+        kind = block[0]
+        if kind == "line" and pending is not None:
+            cap = _match_caption(block[1], pending)
+            if cap is not None:
+                cap_kind, cap_text = cap
+                if cap_kind == "表":
+                    table_no += 1
+                    label = f"表{table_no}. "
+                else:
+                    fig_no += 1
+                    label = f"图{fig_no}. "
+                para = doc.add_paragraph(label + cap_text)
+                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                pending = None
+                continue
+        pending = "表" if kind == "table" else ("图" if kind == "mermaid" else None)
+        if kind == "heading":
+            level = max(1, min(9, block[1] + heading_offset))
             try:
                 para = doc.add_heading(block[2], level=level)
             except KeyError:                    # 模板缺 Heading N 样式时回退
                 para = doc.add_paragraph(block[2])
             _set_outline_level(para, level)
-        elif block[0] == "table":
+        elif kind == "table":
             _add_md_table(doc, block[1])
-        elif block[0] == "mermaid":
+        elif kind == "mermaid":
             _add_mermaid(doc, block[1])
         else:
             s = block[1]

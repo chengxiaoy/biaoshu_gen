@@ -247,12 +247,15 @@ def insert_media_into_content(content: str, media: SectionMedia, agent, delimite
 
 
 def _render_media(media: SectionMedia) -> str:
-    """媒体块渲染：figure 用 mermaid 代码围栏，table 直接 Markdown；标题另起一行。"""
+    """媒体块渲染：figure 用 mermaid 代码围栏，table 直接 Markdown；题注显式
+    带 图：/表： 前缀（assemble 渲染层据此自动编号「图N./表N.」并居中，#82）。"""
     if media.type == "figure":
         body = f"```mermaid\n{_strip_mermaid_fence(media.media_content)}\n```"
+        cap = f"图：{(media.media_caption or '').strip()}"
     else:
         body = media.media_content.strip()
-    return f"{body}\n\n{(media.media_caption or '').strip()}"
+        cap = f"表：{(media.media_caption or '').strip()}"
+    return f"{body}\n\n{cap}"
 
 
 def _strip_mermaid_fence(text: str) -> str:

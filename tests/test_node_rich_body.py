@@ -438,3 +438,13 @@ def test_rich_body_resumes_from_existing_files(tmp_path: Path, monkeypatch):
     assert (d / "1.1.1-设备选型.md").read_text(encoding="utf-8") == first_md   # 复用未重跑
     assert not any(k == "SectionBody" for k, _ in calls)                     # 正文零调用
     assert not any(k == "SectionMedia" for k, _ in calls)                    # 媒体零调用（yaml 复用）
+
+
+def test_render_media_captions_carry_type_prefix():
+    """#82:题注显式带 图:/表: 前缀,assemble 渲染层据此自动编号并居中。"""
+    fenced = _render_media(SectionMedia(type="figure",
+                                        media_content="```mermaid\nflowchart TD\nA-->B\n```",
+                                        media_caption="流程"))
+    assert "\n\n图：流程" in fenced
+    table_md = _render_media(SectionMedia(**VALID_TABLE))
+    assert "\n\n表：设备参数" in table_md

@@ -45,15 +45,17 @@ def _find_range(ranges, keywords: tuple[str, ...]):
 
 def _inject_technical_body(container: Document, body_md: str,
                            img_cache: dict | None = None) -> bool:
-    """把技术正文注入宿主容器:找到技术锚区间则整段替换;锚点只决定落点,
-    正文标题恒为 H1/H2/H3、章节号恒为 1./1.1/1.1.1(#80 2026-09-09 修订——
-    按锚降级曾致编号 1.1.1.1 爆炸+级别全钳 H4),大纲级别经 w:outlineLvl
-    直写保证(pStyle 在真实模板 styleId 体系下可能解析不到);表格/mermaid
-    渲染后并入(#79),插图关系随搬运迁移。找不到锚返回 False。"""
+    """把技术正文注入宿主容器:找到技术锚区间则整段替换。层级按锚挂接
+    (锚 H4 时正文 #→H4/##→H5/###→H6),编号与层级解耦、恒为 1./1.1/1.1.1
+    (#80 的编号要求 + #83 的位置要求:导航/目录嵌在宿主「技术部分>技术方案」
+    之下,不横插顶层章节);大纲级别经 w:outlineLvl 直写保证;标题/表格样式
+    对位宿主样式表,插图关系随搬运迁移。找不到锚返回 False。"""
     tech = _find_range(docx_block_ranges(container), _TECH_KEYWORDS)
     if tech is None:
         return False
-    scratch, elements = _content_elements(number_headings(body_md))
+    offset = max(tech.level - 1, 0)
+    scratch, elements = _content_elements(number_headings(body_md),
+                                          heading_offset=offset)
     retarget_style_ids(elements, scratch, container)   # 标题/表格样式对位宿主样式表
     ensure_style_fallbacks(elements, scratch, container)   # 仍悬空的标题合成兜底样式
     if len(tech.elements) > 1:
@@ -69,14 +71,14 @@ def _inject_technical_body(container: Document, body_md: str,
     return True
 
 
-def _content_elements(md: str) -> tuple[Document, list]:
+def _content_elements(md: str, heading_offset: int = 0) -> tuple[Document, list]:
     """把 markdown 渲染到临时文档，返回 (scratch 文档, body 元素不含 sectPr)。
 
-    返回 scratch 是为了搬运后把其中插图(mermaid 渲染 PNG)的关系迁入宿主包,
-    否则 Word 显示空白。
+    heading_offset:层级按宿主锚点挂接(#83)。返回 scratch 是为了搬运后把其中
+    插图(mermaid 渲染 PNG)的关系迁入宿主包,否则 Word 显示空白。
     """
     scratch = Document()
-    markdown_to_docx(scratch, md)
+    markdown_to_docx(scratch, md, heading_offset=heading_offset)
     elements = [el for el in scratch.element.body.iterchildren()
                 if el.tag.split("}")[-1] != "sectPr"]
     return scratch, elements

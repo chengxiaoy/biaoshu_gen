@@ -122,7 +122,7 @@ def test_markdown_mermaid_renders_picture(monkeypatch):
     assert doc.part.rels[rid].target_part.blob == _MIN_PNG     # 图片字节已入包
     texts = [p.text for p in doc.paragraphs]
     assert not any("flowchart" in x for x in texts)            # 代码文本不再出现
-    assert "图：总体流程" in texts                              # 图题保留
+    assert "图1. 总体流程" in texts                             # 图题保留并自动编号
 
 
 def test_markdown_mermaid_degrades_to_code_text(monkeypatch):
@@ -564,3 +564,62 @@ def test_ensure_style_fallbacks_synthesizes_missing_heading_style():
     assert rPr.find(qn("w:sz")).get(qn("w:val")) == "32"   # 16pt(半磅单位)
     lvl = style.element.find(qn("w:pPr")).find(qn("w:outlineLvl"))
     assert lvl.get(qn("w:val")) == "0"
+
+
+_CAPTION_MD = ("| a | b |\n|---|---|\n| 1 | 2 |\n\n表：功能清单\n\n正文。\n\n"
+               "```mermaid\nflowchart TD\n  A-->B\n```\n\n图：总体流程\n")
+
+
+def test_media_captions_numbered_and_centered(monkeypatch):
+    """#82:紧随表格/mermaid 的题注自动编号「表N./图N.」并水平置中,表/图独立计数。"""
+    import biaoshu_gen.mermaid_render as mr
+
+    monkeypatch.setattr(mr, "render_mermaid_png", lambda code: _MIN_PNG)
+    doc = Document()
+    markdown_to_docx(doc, _CAPTION_MD)
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    by_text = {p.text.strip(): p for p in doc.paragraphs}
+    cap_t, cap_f = by_text["表1. 功能清单"], by_text["图1. 总体流程"]
+    assert cap_t.alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert cap_f.alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert "正文。" in by_text                          # 非题注段不受影响
+    assert by_text["正文。"].alignment != WD_ALIGN_PARAGRAPH.CENTER
+
+
+def test_media_captions_increment_per_media():
+    """第二张表编 表2.,不与图计数混淆;已有编号的题注不重复编号。"""
+    md = ("| a |\n|---|\n| 1 |\n\n表：清单一\n\n"
+          "| b |\n|---|\n| 2 |\n\n表1. 清单二\n\n正文。\n")
+    doc = Document()
+    markdown_to_docx(doc, md)
+    texts = [p.text.strip() for p in doc.paragraphs]
+    assert "表1. 清单一" in texts and "表2. 清单二" in texts   # 已有编号被规整
+
+
+def test_plain_text_after_table_not_caption():
+    """表后普通段落(不以 图/表+分隔符 开头)不误判为题注、不居中不编号。"""
+    doc = Document()
+    markdown_to_docx(doc, "| a |\n|---|\n| 1 |\n\n表中数据说明如下。\n")
+    texts = [p.text.strip() for p in doc.paragraphs]
+    assert "表中数据说明如下。" in texts
+    assert not any(t.startswith("表1.") for t in texts)
+
+
+def test_bare_short_caption_after_media_numbered(monkeypatch):
+    """真实 body.md 的题注是裸名词短语(如「五层纵向贯通架构」)——紧随媒体块、
+    短、无句末标点的行也按题注编号居中;句末带。的正文不受影响。"""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    import biaoshu_gen.mermaid_render as mr
+
+    monkeypatch.setattr(mr, "render_mermaid_png", lambda code: _MIN_PNG)
+    doc = Document()
+    markdown_to_docx(doc, "| a |\n|---|\n| 1 |\n\n五层纵向贯通架构\n\n正文说明。\n\n"
+                     "```mermaid\nflowchart TD\n  A-->B\n```\n\n三集群交付架构\n")
+    by = {p.text.strip(): p for p in doc.paragraphs}
+    assert "表1. 五层纵向贯通架构" in by
+    assert by["表1. 五层纵向贯通架构"].alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert "图1. 三集群交付架构" in by
+    assert by["图1. 三集群交付架构"].alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert by["正文说明。"].alignment != WD_ALIGN_PARAGRAPH.CENTER   # 句末有。:正文不误判
