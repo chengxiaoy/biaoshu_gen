@@ -663,3 +663,18 @@ def test_heading_without_style_gets_paragraph_spacing():
     body = next(p for p in doc.paragraphs if p.text.strip() == "正文。")
     assert body._p.pPr is None or \
         body._p.pPr.find(qn("w:spacing")) is None         # 正文段不加直接段距
+
+
+def test_mermaid_picture_horizontally_centered(monkeypatch):
+    """#84:插图所在段落水平居中。"""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    import biaoshu_gen.mermaid_render as mr
+
+    monkeypatch.setattr(mr, "render_mermaid_png", lambda code: _MIN_PNG)
+    doc = Document()
+    markdown_to_docx(doc, "```mermaid\nflowchart LR\n  A-->B\n```\n\n图：流程\n")
+    pic_para = doc.paragraphs[-2]                       # 图段(后一行为题注)
+    assert pic_para.runs and pic_para.runs[0].element.findall(
+        ".//" + qn("a:blip")), "定位的不是图段"
+    assert pic_para.alignment == WD_ALIGN_PARAGRAPH.CENTER

@@ -217,6 +217,7 @@ def _add_mermaid(doc: DocumentType, code: str) -> None:
     """
     from io import BytesIO
 
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Inches
 
     try:
@@ -226,6 +227,7 @@ def _add_mermaid(doc: DocumentType, code: str) -> None:
         png = None
     if png:
         shape = doc.add_picture(BytesIO(png), width=Inches(_PICTURE_WIDTH_IN))
+        doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER   # 插图水平居中(#84)
         max_h = Inches(_PICTURE_MAX_HEIGHT_IN)
         if shape.height > max_h:
             scale = max_h / shape.height
