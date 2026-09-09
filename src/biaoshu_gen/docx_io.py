@@ -373,6 +373,12 @@ def ensure_style_fallbacks(elements: list, src_doc: DocumentType,
         style.append(style_name)
         style.append(OxmlElement("w:qFormat"))
         pPr = OxmlElement("w:pPr")
+        spacing = OxmlElement("w:spacing")           # 段前/段后+1.5 倍行距,对齐
+        spacing.set(qn("w:before"), "260")           # 模板标题样式惯例(13 磅)
+        spacing.set(qn("w:after"), "260")
+        spacing.set(qn("w:line"), "360")
+        spacing.set(qn("w:lineRule"), "auto")
+        pPr.append(spacing)
         outline = OxmlElement("w:outlineLvl")
         outline.set(qn("w:val"), str(level - 1))
         pPr.append(outline)
@@ -384,6 +390,29 @@ def ensure_style_fallbacks(elements: list, src_doc: DocumentType,
         rPr.append(sz)
         style.append(rPr)
         styles_el.append(style)
+
+
+def _set_para_spacing(para, before: str, after: str, line: str = "360") -> None:
+    """段落直接段距（对齐模板标题样式惯例：260 缇=13 磅，line 360=1.5 倍）。
+
+    样式缺失回退的标题没有样式提供的段前/段后,不补则与正文挤在一起。
+    OOXML pPr 子元素序:spacing 在 outlineLvl 之前。
+    """
+    from docx.oxml import OxmlElement
+
+    pPr = para._p.get_or_add_pPr()
+    sp = pPr.find(qn("w:spacing"))
+    if sp is None:
+        sp = OxmlElement("w:spacing")
+        anchor = pPr.find(qn("w:outlineLvl"))
+        if anchor is not None:
+            anchor.addprevious(sp)
+        else:
+            pPr.append(sp)
+    sp.set(qn("w:before"), before)
+    sp.set(qn("w:after"), after)
+    sp.set(qn("w:line"), line)
+    sp.set(qn("w:lineRule"), "auto")
 
 
 def _set_outline_level(para, level: int) -> None:
@@ -500,10 +529,14 @@ def markdown_to_docx(doc: DocumentType, md: str, heading_offset: int = 0) -> Non
         pending = "表" if kind == "table" else ("图" if kind == "mermaid" else None)
         if kind == "heading":
             level = max(1, min(9, block[1] + heading_offset))
+            style_name = f"Heading {level}"
             try:
-                para = doc.add_heading(block[2], level=level)
-            except KeyError:                    # 模板缺 Heading N 样式时回退
+                doc.styles[style_name]           # 先查样式:add_heading 会先建段
+            except KeyError:                     # 再设样式,缺样式时留孤儿段落
                 para = doc.add_paragraph(block[2])
+                _set_para_spacing(para, "260", "260")
+            else:
+                para = doc.add_paragraph(block[2], style=style_name)
             _set_outline_level(para, level)
         elif kind == "table":
             _add_md_table(doc, block[1])

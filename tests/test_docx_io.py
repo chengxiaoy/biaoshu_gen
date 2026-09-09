@@ -623,3 +623,43 @@ def test_bare_short_caption_after_media_numbered(monkeypatch):
     assert "图1. 三集群交付架构" in by
     assert by["图1. 三集群交付架构"].alignment == WD_ALIGN_PARAGRAPH.CENTER
     assert by["正文说明。"].alignment != WD_ALIGN_PARAGRAPH.CENTER   # 句末有。:正文不误判
+
+
+def test_synthesized_fallback_style_has_spacing():
+    """合成兜底标题样式须带段前/段后距与行距,否则深层标题与正文挤在一起
+    (对齐模板标题样式惯例:260 缇=13 磅,line 360=1.5 倍)。"""
+    import copy as _copy
+
+    from biaoshu_gen.docx_io import (
+        _find_style_by_id, ensure_style_fallbacks, retarget_style_ids,
+    )
+
+    src = Document()
+    markdown_to_docx(src, "# 注入\n")
+    dest = Document()
+    el = dest.styles["Heading 1"].element
+    el.getparent().remove(el)
+    els = [_copy.deepcopy(c) for c in src.element.body.iterchildren()
+           if not c.tag.endswith("}sectPr")]
+    retarget_style_ids(els, src, dest)
+    ensure_style_fallbacks(els, src, dest)
+
+    sp = _find_style_by_id(dest, "Heading1").element.find(qn("w:pPr")).find(qn("w:spacing"))
+    assert sp is not None
+    assert sp.get(qn("w:before")) == "260" and sp.get(qn("w:after")) == "260"
+    assert sp.get(qn("w:line")) == "360" and sp.get(qn("w:lineRule")) == "auto"
+
+
+def test_heading_without_style_gets_paragraph_spacing():
+    """模板缺 Heading 样式回退的普通段落标题也要有段前/段后距;正文段落不动。"""
+    doc = Document()
+    el = doc.styles["Heading 3"].element
+    el.getparent().remove(el)
+    markdown_to_docx(doc, "### 深层标题\n\n正文。\n")
+    head = next(p for p in doc.paragraphs if p.text.strip() == "深层标题")
+    sp = head._p.pPr.find(qn("w:spacing"))
+    assert sp is not None
+    assert sp.get(qn("w:before")) == "260" and sp.get(qn("w:after")) == "260"
+    body = next(p for p in doc.paragraphs if p.text.strip() == "正文。")
+    assert body._p.pPr is None or \
+        body._p.pPr.find(qn("w:spacing")) is None         # 正文段不加直接段距
