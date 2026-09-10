@@ -146,6 +146,9 @@ def test_run_all_reaches_end(tmp_path: Path, monkeypatch):
     _init_run(tmp_path, monkeypatch)
     assert runner.invoke(cli.app, ["run"]).exit_code == 0
     assert calls.count("review") >= 1 and calls[-1] in ("review", "revise")
+    rid = (tmp_path / "data" / "runs" / ".latest").read_text(encoding="utf-8")
+    backs = {p.stem for p in (tmp_path / "data" / "runs" / rid / "checkpoints").glob("*.sqlite")}
+    assert {"parse", "facts", "outline", "fill"} <= backs   # run 逐阶段备份,rerun 有回退锚点
 
 
 def test_rerun_parse_wipes_checkpoint_and_reruns(tmp_path: Path, monkeypatch):

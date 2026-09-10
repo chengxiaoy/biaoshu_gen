@@ -21,6 +21,7 @@ from ..schemas import (
     InsertPoint, MediaNeed, Outline, OutlineNode, SectionBody, SectionMedia,
     from_yaml_file, to_yaml_file,
 )
+from ..fill_context import load_facts
 from ..state import BidState, run_dir
 from .body import _leaf_file, _outline_for_use, _safe_name, _tree_text, assemble_body_md
 
@@ -64,10 +65,12 @@ def rich_body_node(state: BidState) -> dict:
         "figure": settings.media_figure_limit,
     })
 
+    # 用户编辑优先：03_facts.yaml 存在则以其内容覆盖 state.facts（resume 时不用陈旧值）
+    facts = load_facts(state)
+    facts_text = facts.model_dump_json(indent=2)
+
     # F：正文生成——按二级目录粒度并发（同一二级下的叶子串行，保持章内衔接）；
     # 崩溃续跑：叶子文件已存在则复用；审核回环（body_fix_sections）强制重生成问题小节
-    facts_text = state.facts.model_dump_json(indent=2) if state.facts else ""
-
     def _units() -> list[tuple[OutlineNode, list[OutlineNode]]]:
         """二级粒度分组：(二级节点, 其叶子列表)；直挂一级的叶子以一级为界自成一组。"""
         units: list[tuple[OutlineNode, list[OutlineNode]]] = []
@@ -87,12 +90,20 @@ def rich_body_node(state: BidState) -> dict:
         return units
 
     units = _units()
-    # 二级 target_words 实际计算 = 其下叶子之和（正文树上下文展示合计，须在渲染树之前）
+    # 二级 target_words 实际计算 = 其下叶子之和（正文树上下文展示合计，须在渲染树之前）；
+    # 同一趟顺带产出叶子上下文树：所在二级目录的整体子树——正文生成时让模型看到
+    # 本单元在全书的定位，又不撑大 prompt（整棵大纲不进单节 prompt）。与知识库检索
+    # 无关，任何标书类型都要有：此前藏在 is_goods 块内且 _tree_text(sec) 传错类型
+    # （OutlineNode 无 .sections 属性），服务/工程类的 tree 一律是「（无）」，正文
+    # 失去目录定位——跨章口径漂移的成因之一。
+    context_trees: dict[str, str] = {}
     for sec, unit_leaves in units:
         if sec.children:
             sec.target_words = sum(l.target_words for l in unit_leaves)
+        sec_tree = _tree_text(sec)
+        for l in unit_leaves:
+            context_trees[l.id] = sec_tree
 
-    tree = _tree_text(outline)
     body_agent = make_agent(SectionBody, BODY_SYSTEM)
     fix_ids = {i for i in (state.body_fix_sections or []) if i in {l.id for l in leaves}}
 
@@ -106,7 +117,8 @@ def rich_body_node(state: BidState) -> dict:
         for sec, unit_leaves in units:
             if all(l.id not in fix_ids and _leaf_file(d, l).exists() for l in unit_leaves):
                 continue
-            query = " ".join(
+            goods_prefix_query = f"检索 {facts.goods_list} 产品的以下信息：\n"
+            query = goods_prefix_query + " ".join(
                 [sec.title, sec.description or ""] + [l.title for l in unit_leaves])
             hits = search_snippets(state, query)
             text = "\n\n".join(f"【{name}】\n{text}" for name, text in hits) or "（无）"
@@ -119,10 +131,11 @@ def rich_body_node(state: BidState) -> dict:
         if f.exists() and leaf.id not in fix_ids:
             return leaf, SectionBody(title=leaf.title, content=f.read_text(encoding="utf-8"))
         kb_text = unit_kb_texts.get(leaf.id, "（无）")
+        context_tree = context_trees.get(leaf.id, "（无）")
         feedback = state.body_feedback if leaf.id in fix_ids else ""
         result = run_sync(body_agent, build_body_prompt(
             sec_id=leaf.id, title=leaf.title, description=leaf.description,
-            target_words=leaf.target_words, tree=tree, facts=facts_text, kb=kb_text,
+            target_words=leaf.target_words, tree=context_tree, facts=facts_text, kb=kb_text,
             feedback=feedback,
         )).output
         f.write_text(result.content, encoding="utf-8")   # 即时落盘：中断后重跑只需补缺
@@ -149,12 +162,11 @@ def rich_body_node(state: BidState) -> dict:
         if media_file.exists():
             return leaf, from_yaml_file(SectionMedia, media_file)
         content = section_contents[leaf.id]
-        kb_text = unit_kb_texts.get(leaf.id, "（无）")
         feedback = ""
         for _ in range(_MEDIA_RETRIES + 1):
             result = run_sync(media_agent, build_media_prompt(
                 sec_id=leaf.id, title=leaf.title, description=leaf.description,
-                media_type=leaf.media_type, content=content, kb=kb_text, feedback=feedback,
+                media_type=leaf.media_type, content=content, feedback=feedback,
             )).output
             error = _validate_media(result)
             if error is None:
@@ -241,6 +253,8 @@ def insert_media_into_content(content: str, media: SectionMedia, agent, delimite
         paragraphs=paragraphs, media_type=media.type or "table",
         caption=media.media_caption or "",
     )).output
+    if result.index == -1:
+        return content
     idx = min(max(result.index, 0), len(paragraphs))
     paragraphs.insert(idx, _render_media(media))
     return delimiter.join(paragraphs)

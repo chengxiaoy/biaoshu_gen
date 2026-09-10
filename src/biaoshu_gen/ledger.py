@@ -92,3 +92,17 @@ def ragflow_files(kb_dir: Path) -> list[Path]:
         if p.is_file() and not p.name.startswith(".")
         and not _is_ledger_dir(p, root) and p.suffix.lower() in _RAGFLOW_EXTS
     )
+
+
+def has_images(kb_dir: Path) -> bool:
+    """kb 里是否存在图片（后缀短路探测，不解析文档）。
+
+    fill_forms 的插图 pass 触发只需这个布尔——用 build() 全量记账会顺带把每个
+    docx/pdf 做文本提取（一次 fill 最多调 4 次 build，附加段并行再翻倍），
+    对一个 yes/no 问题纯属浪费；图片集在 run 生命周期内不变，后缀探测足够。
+    """
+    root = Path(kb_dir)
+    if not root.exists():
+        return False
+    return any(p.suffix.lower() in _IMAGE_EXTS
+               for p in root.rglob("*") if p.is_file())

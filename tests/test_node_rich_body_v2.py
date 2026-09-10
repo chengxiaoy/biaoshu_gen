@@ -253,3 +253,16 @@ def test_media_generated_and_inserted_per_leaf(tmp_path: Path, monkeypatch):
     assert "| 型号 | 功率 |" in leaf_md and "设备参数" in leaf_md
     body_md = (d / "body.md").read_text(encoding="utf-8")
     assert body_md.count("| 型号 | 功率 |") == 3    # 限额 3：全部 4 叶中 3 叶保留表格
+
+
+def test_unit_prompt_tree_is_own_chapter_subtree(tmp_path: Path, monkeypatch):
+    """单元正文 prompt 的 tree = 所在一级章子树:含本章一级标题与全部二三级,
+    不含其它章(全书树在多章大纲下随章数膨胀,单元 prompt 只需本章定位)。"""
+    monkeypatch.chdir(tmp_path)
+    captured: list = []
+    monkeypatch.setattr(rb2, "make_agent", _factory(captured=captured))
+    rb2.rich_body_v2_node(_state(tmp_path))
+    body_prompts = [p for name, p in captured if name == "UnitBodies"]
+    p11 = next(p for p in body_prompts if "1.1.1" in p)
+    assert "总体方案" in p11 and "1.1" in p11 and "部署架构" in p11   # 本章全部二三级
+    assert "实施方案" not in p11 and "进度安排" not in p11           # 别的章不进 prompt

@@ -24,8 +24,9 @@ def _outline_for_use(state: BidState) -> Outline:
     return state.outline
 
 
-def _tree_text(outline: Outline) -> str:
-    """全书目录的紧凑渲染（正文 prompt 的上下文）。"""
+def _tree_text(outline: Outline | OutlineNode) -> str:
+    """目录的紧凑渲染（正文 prompt 的上下文）：传全书 Outline 渲染整棵；
+    传单个 OutlineNode（如叶子所在的二级目录）则只渲染该子树。"""
     lines: list[str] = []
 
     def walk(node: OutlineNode, depth: int) -> None:
@@ -36,7 +37,8 @@ def _tree_text(outline: Outline) -> str:
         for c in node.children:
             walk(c, depth + 1)
 
-    for s in outline.sections:
+    roots = outline.sections if isinstance(outline, Outline) else [outline]
+    for s in roots:
         walk(s, 0)
     return "\n".join(lines)
 

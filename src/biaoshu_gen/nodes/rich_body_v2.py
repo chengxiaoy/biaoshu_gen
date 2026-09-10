@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ..config import get_settings
+from ..fill_context import load_facts
 from ..kb_v2 import search_snippets
 from ..models import make_agent, run_sync
 from ..prompts.rich_body import (
@@ -101,10 +102,16 @@ def rich_body_v2_node(state: BidState) -> dict:
         "table": settings.media_table_limit,
         "figure": settings.media_figure_limit,
     })
-
+    # 用户编辑优先：03_facts.yaml 存在则以其内容覆盖 state.facts（resume 时不用陈旧值）
+    facts = load_facts(state)
     # 检索策略（同 rich_body）：仅货物类检索产品库；query=二级标题+描述+全部三级标题，
     # 一次检索覆盖整单元，单元内叶子共享材料；全部叶子可复用的单元跳过。
-    facts_text = state.facts.model_dump_json(indent=2) if state.facts else ""
+    facts.template_fields = {}
+    facts.credit_code =""
+    facts.legal_person =""
+    facts.company_name =""
+    facts_text = facts.model_dump_json(indent=2)
+
     fix_ids = {i for i in (state.body_fix_sections or []) if i in {l.id for l in leaves}}
     is_goods = bool(state.metadata and state.metadata.bid_type == "货物")
     unit_kb_texts: dict[str, str] = {}
@@ -112,14 +119,27 @@ def rich_body_v2_node(state: BidState) -> dict:
         for sec, unit_leaves in units:
             if all(l.id not in fix_ids and _leaf_file(d, l).exists() for l in unit_leaves):
                 continue
-            query = " ".join(
+            goods_prefix_query = f"检索 {facts.goods_list} 产品的以下信息：\n"
+            query = goods_prefix_query + " ".join(
                 [sec.title, sec.description or ""] + [l.title for l in unit_leaves])
             hits = search_snippets(state, query)
             text = "\n\n".join(f"【{name}】\n{text}" for name, text in hits) or "（无）"
             for l in unit_leaves:
                 unit_kb_texts[l.id] = text
 
-    tree = _tree_text(outline)
+
+    # 上下文树：当前单元所在的一级章子树（一级标题 + 其下全部二三级）——正文生成时
+    # 让模型看到本章结构定位，又不把整本书塞进每个单元 prompt（全书树在多章大纲下
+    # 会随章数线性膨胀）；同一一级下的多个单元共享同一棵树，按节点缓存。
+    unit_trees: dict[int, str] = {}
+
+    def _chapter_tree(sec: OutlineNode) -> str:
+        key = id(sec)
+        if key not in unit_trees:
+            ch = next((c for c in outline.sections
+                       if c is sec or any(s is sec for s in c.children)), None)
+            unit_trees[key] = _tree_text(ch) if ch is not None else _tree_text(sec)
+        return unit_trees[key]
 
     # F'：正文——每个二级节一次调用返回该节全部三级正文（并发=二级单元数闸门）；
     # sec_id 对位写回需要生成的叶子，可复用叶子保留盘上原文
@@ -131,7 +151,7 @@ def rich_body_v2_node(state: BidState) -> dict:
             return [(l, _leaf_file(d, l).read_text(encoding="utf-8")) for l in unit_leaves]
         feedback = state.body_feedback if any(l.id in fix_ids for l in unit_leaves) else ""
         result: UnitBodies = run_sync(body_agent, build_unit_body_prompt(
-            sec=sec, unit_leaves=unit_leaves, tree=tree, facts=facts_text,
+            sec=sec, unit_leaves=unit_leaves, tree=_chapter_tree(sec), facts=facts_text,
             kb=unit_kb_texts.get(unit_leaves[0].id, "（无）"), feedback=feedback,
         )).output
         by_id = {s.sec_id: s for s in result.sections}
@@ -166,12 +186,11 @@ def rich_body_v2_node(state: BidState) -> dict:
         if media_file.exists():
             return leaf, from_yaml_file(SectionMedia, media_file)
         content = section_contents[leaf.id]
-        kb_text = unit_kb_texts.get(leaf.id, "（无）")
         feedback = ""
         for _ in range(_MEDIA_RETRIES + 1):
             result = run_sync(media_agent, build_media_prompt(
                 sec_id=leaf.id, title=leaf.title, description=leaf.description,
-                media_type=leaf.media_type, content=content, kb=kb_text, feedback=feedback,
+                media_type=leaf.media_type, content=content, feedback=feedback,
             )).output
             error = _validate_media(result)
             if error is None:

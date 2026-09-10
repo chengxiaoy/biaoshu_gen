@@ -87,3 +87,11 @@ def test_harness_base_url_normalizes_trailing_paths():
 def test_anthropic_base_url_property_removed():
     """派生逻辑（OpenRouter 双协议耦合）已删，不得再出现。"""
     assert not hasattr(Settings(_env_file=None), "anthropic_base_url")
+
+
+def test_llm_reasoning_effort_normalized():
+    """只认 minimal/low/medium/high（大小写不敏感），其余（含空串）归空 = 跟随默认。"""
+    assert Settings(_env_file=None, llm_reasoning_effort="  HIGH ").llm_reasoning_effort == "high"
+    assert Settings(_env_file=None, llm_reasoning_effort="minimal").llm_reasoning_effort == "minimal"
+    assert Settings(_env_file=None, llm_reasoning_effort="").llm_reasoning_effort == ""
+    assert Settings(_env_file=None, llm_reasoning_effort="ultra").llm_reasoning_effort == ""

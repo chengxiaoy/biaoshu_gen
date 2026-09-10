@@ -29,6 +29,11 @@ _BOUNDARY_CHARS = set("：:（）() \t，、；") | UNDERLINE_CHARS
 # 标签后的跳过集 = 边界集中的非下划线成员(_fill_blank_after 的游走用;单一来源防漂移)
 _SKIP_CHARS = "".join(sorted(_BOUNDARY_CHARS - UNDERLINE_CHARS))
 _KEEP_TAIL = "＿＿"                              # 值落在下划线段上后保留的余线
+# 空位 run 的值写到他处时如何清空（_slot_kind 语义的伴生规则，单一来源）：
+# space(带下划线纯空白)整清空——值已带格式;line(下划线字符段)留余线维持版式
+_CLEAR_BY_KIND = {"space": "", "line": _KEEP_TAIL}
+# 括号占位「（xxx）」检测（_is_fill_candidate 与 replace 吸收判定共用;{1,20} 容常规占位）
+_PAREN_PLACEHOLDER = re.compile(r"[（(][^（）()]{1,20}[）)]")
 
 
 def _slot_kind(run) -> str | None:
@@ -200,8 +205,9 @@ def fill_blank_before_label(doc, label: str, value: str) -> int:
 
     多标签并列（如「（项目名称、政府采购编号、采购代理编号）」）归属不明，不填；
     括号内容须与 label 全等，防「（采购人单位名称）」误中「（单位名称）」。
+    填值后**清除紧随的「(label)」注记**（feedback #87）：值已表达语义，保留会叠读成
+    「某某项目（项目名称）的磋商邀请」；同 run 内仅删首个括号对，其余文本不动。
     """
-    keep_by_kind = {"space": "", "line": _KEEP_TAIL}
     n = 0
     for p in doc.paragraphs:
         runs = p.runs
@@ -211,7 +217,8 @@ def fill_blank_before_label(doc, label: str, value: str) -> int:
                 continue                        # 非空位 run 不动
             m = re.match(r"\s*[（(]([^（）()]+)[）)]", runs[i + 1].text or "")
             if m and m.group(1).strip() == label:
-                runs[i].text = value + keep_by_kind[kind]
+                runs[i].text = value + _CLEAR_BY_KIND[kind]
+                runs[i + 1].text = runs[i + 1].text[m.end():]   # 命中即首个括号对,直接切掉
                 n += 1
     return n
 
@@ -250,6 +257,7 @@ def replace_in_para(doc, prefix: str, old: str, new: str) -> list[Paragraph]:
     hits = [p for p in doc.paragraphs if p.text.strip().startswith(prefix)]
     if not hits:
         raise RuntimeError(f"找不到以 {prefix!r} 开头的段落；请核对模板文本")
+    absorb_slot = _PAREN_PLACEHOLDER.match(old.strip())   # 括号占位:连前置空位一并吞并
     for p in hits:
         full = "".join(r.text for r in p.runs)
         matches = _find_all(full, old) \
@@ -258,6 +266,16 @@ def replace_in_para(doc, prefix: str, old: str, new: str) -> list[Paragraph]:
             continue                      # 同前缀但无此占位符的段落跳过,其余段落继续
         spans = _para_spans(p)
         for pos, end in reversed(matches):
+            if absorb_slot:
+                # feedback #87:「签字代表＿＿（姓名、职务）」形态,括号占位与其前下划线
+                # 空位是同一填写点——只换括号会留下悬空空位。空位 run 按 _CLEAR_BY_KIND
+                # 清空(纯空白整清/下划线字符留余线),紧邻即止。
+                for s, e, r in spans:
+                    if s <= pos - 1 < e and (r.text or ""):
+                        kind = _slot_kind(r)
+                        if kind in _CLEAR_BY_KIND:
+                            r.text = _CLEAR_BY_KIND[kind]
+                        break
             hit = [(s, e, r) for s, e, r in spans if s < end and e > pos
                    or (s == e and pos <= s < end)]         # 空 run 视为在 pos 处
             if not hit:
@@ -352,9 +370,6 @@ def find_table(doc, *header_keywords: str) -> int:
         if all(_match_key(nk, alt, nhead) for nk, alt in keys):
             return i
     raise RuntimeError(f"找不到表头含 {header_keywords} 的表格")
-
-
-_PAREN_PLACEHOLDER = re.compile(r"[（(][^（）()]{1,20}[）)]")
 
 
 def _is_fill_candidate(p) -> bool:

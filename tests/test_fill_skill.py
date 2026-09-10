@@ -144,7 +144,7 @@ def test_run_fill_plan_batch_and_errors(tmp_path: Path):
 def test_fill_blank_before_label_paren_annotation(tmp_path: Path):
     """「空位在标签前」形态:__(标签)——下划线空位 run 后紧跟括号注记(commercial 部分
     的主要文体)。仅括号内是单一标签时才填,多标签并列(如 项目名称、政府采购编号)
-    归属不明,不填留给 LLM。"""
+    归属不明,不填留给 LLM;填值后清除「(label)」注记(feedback #87:防「值(标签)」叠读)。"""
     d = Document()
     p = d.add_paragraph()
     p.add_run("我系参加")
@@ -165,9 +165,30 @@ def test_fill_blank_before_label_paren_annotation(tmp_path: Path):
     d2 = Document(str(src))
     assert fill_blank_before_label(d2, "项目名称", "实训室项目") == 1
     texts = [x.text for x in d2.paragraphs]
-    assert texts[0].startswith("我系参加实训室项目（项目名称）")
+    assert texts[0].startswith("我系参加实训室项目，委托代理编号")   # 注记已随填清除
+    assert "（项目名称）" not in texts[0]
     assert "本公司参加        （单位名称）的" == texts[1]      # 单位名称未给值不动
     assert "（项目名称、政府采购编号" in texts[2] and "实训室项目" not in texts[2]
+
+
+def test_fill_blank_before_label_keeps_rest_of_annotation_run(tmp_path: Path):
+    """注记与后续文本同 run:只删「(label)」括号对,run 内其余文本(含下一个括号占位)保留。"""
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("根据贵方为")
+    p.add_run("       ").underline = True
+    p.add_run("（项目名称）的磋商邀请（政府采购编号：")
+    b = p.add_run("      ")
+    b.underline = True
+    p.add_run("），")
+    src = tmp_path / "t.docx"
+    d.save(src)
+
+    d2 = Document(str(src))
+    assert fill_blank_before_label(d2, "项目名称", "演示项目") == 1
+    text = d2.paragraphs[0].text
+    assert text == "根据贵方为演示项目的磋商邀请（政府采购编号：      ），"
+    assert any(r.underline for r in d2.paragraphs[0].runs)   # 编号空位 run 未受牵连
 
 
 def test_fill_blank_before_label_in_prefill_known(tmp_path: Path, monkeypatch):
@@ -199,8 +220,8 @@ def test_fill_blank_before_label_in_prefill_known(tmp_path: Path, monkeypatch):
     doc = Document(str(tpl))
     summary = prefill_known(doc, state)
     texts = [x.text for x in doc.paragraphs]
-    assert "本公司参加某某科技有限公司（待替换）（单位名称）承建" == texts[0]
-    assert "我系参加演示项目（项目名称）磋商" == texts[1]
+    assert "本公司参加某某科技有限公司（待替换）承建" == texts[0]   # 注记「(单位名称)」随填清除
+    assert "我系参加演示项目磋商" == texts[1]
     assert summary["投标人"] == 1 and summary["项目名称"] == 1
 
 
@@ -506,3 +527,51 @@ def test_picture_ops_same_prefix_keep_declared_order(tmp_path: Path):
     texts = [p.text for p in Document(str(tmp_path / "out.docx")).paragraphs]
     assert len(d2 := Document(str(tmp_path / "out.docx")).inline_shapes) == 2
     assert texts.index("图A") < texts.index("图B")               # 声明顺序 = 落盘顺序
+
+
+def test_replace_absorbs_leading_slot_run(tmp_path: Path):
+    """replace 括号占位时吞并紧邻前置空位(feedback #87):
+    「签字代表＿＿（姓名、职务）」——只换括号会留下悬空空位,空位与括号是同一填写点;
+    多标签括号(姓名、职务)fill_blank_before_label 不填,正是由 replace 整点替换接管。"""
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("签字代表 ")
+    b = p.add_run("      ")
+    b.underline = True
+    p.add_run("（姓名、职务）经正式授权并代表供应商")
+    p2 = d.add_paragraph()
+    p2.add_run("我系参加")
+    p2.add_run("＿＿＿＿").underline = True
+    p2.add_run("（项目名称、政府采购编号）响应文件")
+    src = tmp_path / "t.docx"
+    d.save(src)
+
+    errors = run_fill_plan(str(src), str(tmp_path / "out.docx"), [
+        {"op": "replace", "prefix": "签字代表", "old": "（姓名、职务）",
+         "new": "吴楚斌、法定代表人"},
+        {"op": "replace", "prefix": "我系参加", "old": "（项目名称、政府采购编号）",
+         "new": "演示项目 HN-001"},
+    ])
+    assert errors == []
+    texts = [x.text for x in Document(str(tmp_path / "out.docx")).paragraphs]
+    assert texts[0] == "签字代表 吴楚斌、法定代表人经正式授权并代表供应商"   # 空白空位整吞
+    assert texts[1] == "我系参加＿＿演示项目 HN-001响应文件"                # 字符线 run 留余线
+
+
+def test_replace_no_absorb_when_old_not_paren(tmp_path: Path):
+    """old 非括号占位(普通文本替换)不吞并前置空位——既有语义不变。"""
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("根据贵方为")
+    b = p.add_run("       ")
+    b.underline = True
+    p.add_run("试点项目的磋商邀请")
+    src = tmp_path / "t.docx"
+    d.save(src)
+
+    errors = run_fill_plan(str(src), str(tmp_path / "out.docx"), [
+        {"op": "replace", "prefix": "根据贵方", "old": "试点项目", "new": "演示项目"},
+    ])
+    assert errors == []
+    text = Document(str(tmp_path / "out.docx")).paragraphs[0].text
+    assert text == "根据贵方为       演示项目的磋商邀请"                     # 空位不动

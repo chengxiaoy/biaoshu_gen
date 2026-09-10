@@ -11,6 +11,9 @@ import requests
 from ragflow_sdk import RAGFlow
 
 from .config import get_settings
+import logging
+
+log = logging.getLogger(__name__)
 
 # 允许上传的文件类型（文本口径与 kb.py 一致；docx/pdf/图片交给 RAGFlow 自带解析器）
 _UPLOAD_EXTS = {".txt", ".md", ".docx", ".pdf", ".jpg", ".jpeg", ".png", ".pptx"}
@@ -76,6 +79,7 @@ def search_snippets(state, query: str, top_k: int | None = None) -> list[tuple[s
     （init 用了 --skip-ragflow）时直接报错指向重跑 init。
     返回 [(来源文档名, 文本)]。
     """
+    log.info("[kb] 检索: %s", query)
     dataset_id = getattr(state, "ragflow_dataset_id", "")
     if not dataset_id:
         raise ValueError(

@@ -18,6 +18,7 @@ from .split_template import split_template_node      # noqa: E402
 from .facts import facts_node                        # noqa: E402
 from .outline import outline_node                    # noqa: E402
 from .rich_body import rich_body_node                # noqa: E402  # body 节点已由 rich_body 替换（图表生成 + 二级粒度并发）
+from .rich_body_v2 import rich_body_v2_node                # noqa: E402  # body 节点已由 rich_body 替换（图表生成 + 二级粒度并发）
 from .body_review import body_review_node            # noqa: E402
 from .fill_forms import fill_forms_node              # noqa: E402
 from .deviation_table import deviation_table_node    # noqa: E402
@@ -31,7 +32,7 @@ DEFAULT_NODES: dict[str, NodeFn] = {
     "split_template": split_template_node,
     "facts": facts_node,
     "outline": outline_node,
-    "body": rich_body_node,
+    "body": rich_body_v2_node,
     "body_review": body_review_node,
     "fill_forms": fill_forms_node,
     "deviation_table": deviation_table_node,

@@ -448,3 +448,32 @@ def test_render_media_captions_carry_type_prefix():
     assert "\n\n图：流程" in fenced
     table_md = _render_media(SectionMedia(**VALID_TABLE))
     assert "\n\n表：设备参数" in table_md
+
+
+def test_tree_text_accepts_node_subtree():
+    """_tree_text 兼容单节点:传二级 OutlineNode 渲染该子树(此前传错类型必 AttributeError,
+    且调用点藏在 is_goods 块内从未暴露)。"""
+    from biaoshu_gen.nodes.body import _tree_text
+
+    outline = _outline()
+    sec = outline.sections[0].children[0]              # 1.1 设备与部署
+    t = _tree_text(sec)
+    assert "设备与部署" in t and "1.1.1" in t and "1.1.2" in t
+    assert "实施方案" not in t                          # 不含其它章
+    assert "实施方案" in _tree_text(outline)            # 全书 Outline 渲染不受影响
+
+
+def test_rich_body_tree_context_is_parent_unit_subtree(tmp_path: Path, monkeypatch):
+    """正文 prompt 的 tree = 叶子所在二级目录的整体子树:含本二级标题与同单元兄弟小节,
+    不含跨章内容;服务类(非货物)同样有(此前 context_trees 藏在 is_goods 块内,恒「（无）」)。"""
+    monkeypatch.chdir(tmp_path)
+    captured: list = []
+    monkeypatch.setattr(rb_mod, "make_agent",
+                        _factory(need={"type": "none"}, body_content="内容达标" * 5,
+                                 captured=captured))
+    rb_mod.rich_body_node(_state(tmp_path))
+    body_prompts = [p_ for k, p_ in captured if k == "SectionBody"]
+    p_111 = next(p_ for p_ in body_prompts if "1.1.1" in p_)
+    assert "设备与部署" in p_111                        # 所在二级目录标题在树里
+    assert "1.1.2" in p_111 and "部署架构" in p_111      # 同单元兄弟小节(整体子树)
+    assert "进度与保障" not in p_111                    # 别的章不进本节 prompt

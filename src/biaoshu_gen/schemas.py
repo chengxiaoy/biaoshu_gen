@@ -187,7 +187,9 @@ class MediaNeed(BaseModel):
 
 class InsertPoint(BaseModel):
     """媒体插入位置：插入到第 index 段之前（段落从 0 编号）。"""
-    index: int = 0
+    index: int = Field(
+        default=0,
+        description="插入到第 index 个段落之前,取 0..正文段数;-1=正文已有类似图表,跳过插入")
 
 class BodyReviewReport(BaseModel):
     passed: bool
@@ -221,16 +223,20 @@ class TemplateAnchor(BaseModel):
 
 
 class DeviationRow(BaseModel):
-    """偏离表数据行(序号由代码生成,模型不数数)。"""
-    clause: str = ""          # 磋商文件章节条款号
-    requirement: str = ""     # 磋商文件要求(摘原文)
-    response: str = ""        # 响应文件的应答
-    deviation: str = "无偏离"   # 偏离说明
+    """偏离表数据行(序号由代码生成,模型不数数)。
+
+    description 进 JSON schema 被 LLM 直接看到(prompt 规则就近带到字段);
+    requirement/response 必填挡漏字段,空白串仍由节点层 _validate(strip 语义)拦截。
+    """
+    clause: str = Field(default="", description="磋商/招标文件的章节条款号;要求无条款号时可空")
+    requirement: str = Field(description="招标要求:摘录原文要点,禁止为空")
+    response: str = Field(description="响应文件的应答:逐条明确应答,应满足招标要求各项参数，将要求中的参数范围更改为明确最低符合要求的标准值（上界或者下界）")
+    deviation: str = Field(default="无偏离", description="偏离说明:无偏离/正偏离(优于要求)，尽量无偏离")
 
     @field_validator("deviation")
     @classmethod
     def _blank_means_none(cls, v: str) -> str:
-        return v if v.strip() else "无偏离"
+        return v.strip() or "无偏离"
 
 
 class DeviationTableRows(BaseModel):
@@ -319,15 +325,6 @@ class TableOp(BaseModel):
         description="数据行二维数组,按列顺序对位;null=跳过该格")
 
 
-class PictureOp(BaseModel):
-    """picture=段落之后插图。"""
-    op: Literal["picture"] = Field(description="picture=在段落之后插入图片")
-    prefix: str = Field(description="锚段落前缀(段落须以它开头,照抄地图)")
-    img: str = Field(description="图片绝对路径(取预注入的 kb 图片路径清单,禁止读取图片内容)")
-    width: float = Field(default=0.0, description="图宽(英寸;0=默认 5.6)")
-    caption: str = Field(default="", description="图注(可空)")
-
-
 class AppendOp(BaseModel):
     """append=段落末尾追加（找不到标签锚时才补内容）。"""
     op: Literal["append"] = Field(description="append=段落末尾追加:找不到标签锚时才补内容")
@@ -336,8 +333,10 @@ class AppendOp(BaseModel):
 
 
 # discriminator=op:模型按 op 值选中分支,输出只含该分支字段
+# picture 不在 plan op 之列(feedback #86 终版):插图位置由 harness agent 对照文档实况
+# 自主决定,程序化 plan 只管文字/表格填写
 FillOp = Annotated[
-    LabelOp | ReplaceOp | CellOp | TableOp | PictureOp | AppendOp,
+    LabelOp | ReplaceOp | CellOp | TableOp | AppendOp,
     Field(discriminator="op"),
 ]
 
@@ -347,8 +346,9 @@ class FormsFill(BaseModel):
     plan: list[FillOp] = Field(
         default_factory=list,
         description="填写操作序列;op 选型:label=按标签填空(最常用) / replace=括号占位替换"
-                    "(全部命中) / table=同表多格按行批量填(优先) / cell=散落单格 / picture=插图"
-                    " / append=段末追加(找不到标签锚时才用);每条只填本 op 的字段;"
+                    "(全部命中) / table=同表多格按行批量填(优先) / cell=散落单格 / "
+                    "append=段末追加(找不到标签锚时才用);每条只填本 op 的字段;"
+                    "**不发 picture**(插图由后续 harness 阶段自主处理);"
                     "**金额等人工填写项与缺失资料不发 op**(〔待人工填写〕/〔待补〕等占位值"
                     "会被系统丢弃),空位保持原样留给人工")
 

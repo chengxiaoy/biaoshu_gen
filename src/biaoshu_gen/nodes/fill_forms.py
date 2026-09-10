@@ -1,9 +1,10 @@
 """节点 7：其余填写部分整体填写（原 fill_forms + commercial 合并，feedback #78）。
 
-先程序化填写：LLM 直出填写 plan（FillOp 列表），python 经 fill_skill.run_fill_plan
-单次执行（快、稳定、不依赖 harness 通道）；再 harness 兜底：plan 两次校验失败、
-LLM 通道异常或执行报错时，由 claude agent 在同工作区打开既有产物补填——
-兜底失败不弃产物（记 error.log 放行，程序化成果保留）。
+程序化填写：LLM 直出填写 plan（FillOp 列表），python 经 fill_skill.run_fill_plan
+单次执行（快、稳定、不依赖 harness 通道）。遗留两路：
+- plan 失败/执行报错：记 error.log 供人工补（不弃产物），不再交 harness 兜底填写；
+- 插图：fill 阶段 harness 的唯一任务（_picture_pass）——kb 有图即触发，agent 对照
+  产物实况自主决定插图位置，失败同样记 error.log 放行。
 同桶多区间附加段经 run_with_extras 各跑独立工作区(ws_key 隔离,互不覆盖)。
 确定值（项目名称等）仍由代码预填。skip gate 与 forms_docx_path 契约不变。
 """
@@ -21,10 +22,9 @@ from ..fill_context import (
 )
 from ..fill_skill import run_fill_plan
 from ..harness import HarnessTask, environment_notes, prepare_agent_workspace, run_harness_task
+from ..ledger import has_images
 from ..models import make_agent, run_sync       # noqa: F401  (测试 monkeypatch ff.make_agent)
-from ..prompts.fill_forms import (
-    SYSTEM, build_fallback_prompt, build_user_prompt, FALLBACK_SYSTEM,
-)
+from ..prompts.fill_forms import PICTURE_SYSTEM, SYSTEM, build_picture_prompt, build_user_prompt
 from ..schemas import FillOp, FormsFill
 from ..state import BidState, run_dir, write_node_error
 
@@ -76,23 +76,21 @@ def _ops_of(ops) -> list[dict]:
     return [op.model_dump(exclude_none=True) for op in ops]
 
 
-def _harness_fallback(state: BidState, ws_key: str, out: Path,
-                      errors: list[str], plan_failed: bool) -> None:
-    """harness 兜底：程序化路径的遗留（plan 失败 / 报错 op）由 agent 在产物上补填。
+def _picture_pass(state: BidState, ws_key: str, out: Path) -> None:
+    """插图 pass：fill 阶段 harness 的唯一任务（feedback #86 终版）——agent 对照
+    产物实况自主决定哪些图片插入、插在哪段之后；不做任何其他填写。
 
     工作区与程序化路径共用（prepare_agent_workspace 幂等投放 tender/scoring/kb/
-    fill_skill），地图基于**当前产物**（报错空位都在其中）。产物缺失校验天然
-    满足（out 已存在），成败由 agent 实际补填决定。
+    fill_skill），地图基于**当前产物**。产物缺失校验天然满足（out 已存在）。
     """
     run = run_dir(state)
     ws = prepare_agent_workspace(
         state, fill_ws_subdir("forms", ws_key),
         extra_inputs=[(run / "01_parse" / "scoring.yaml", "scoring.yaml")],
         template_src=resolve_template_src(state, "forms") or None)
-    prompt = (FALLBACK_SYSTEM + "\n\n"
-              + build_fallback_prompt(str(out), errors, plan_failed)
+    prompt = (PICTURE_SYSTEM + "\n\n" + build_picture_prompt(str(out))
               + "\n\n" + build_fill_context(state, tpl_doc=Document(str(out)))
-              + "\n\n" + VALUE_PRIORITY + "\n\n" + environment_notes())
+              + "\n\n" + environment_notes())
     run_harness_task(HarnessTask(prompt=prompt, cwd=ws, expected_outputs=[out]))
 
 
@@ -145,6 +143,7 @@ def _forms_core(state: BidState, ws_key: str = "") -> dict:
         return kept
 
     # ---- 先程序化：LLM 直出 plan -> python 确定性执行 ----
+    # plan 不含 picture（feedback #86 终版）：插图位置由 harness agent 对照文档实况自主决定
     result: FormsFill | None = None
     errors: list[str] = []
     err = ""
@@ -166,20 +165,27 @@ def _forms_core(state: BidState, ws_key: str = "") -> dict:
         err = str(exc)
         log.warning("[forms] %s,转 harness 兜底", err)
 
-    # ---- 再 harness 兜底：plan 失败 / LLM 挂 / 执行报错 ----
-    plan_failed = result is None
-    if plan_failed or errors:
-        reason = err if plan_failed else f"{len(errors)} 条 op 执行报错"
-        print(f"⚠ forms 程序化填写遗留（{reason}），转 harness 兜底补填…")
+    # ---- 遗留处理：plan 失败/报错 op 只记 error.log（不弃产物，供人工补）；
+    # harness 不再兜底填写——fill 阶段它的唯一任务是插图 pass ----
+    problems: list[str] = []
+    if result is None:
+        problems.append(f"程序化填写失败（plan 两次校验未过/LLM 通道异常）: {err}")
+    elif errors:
+        problems.append(f"{len(errors)} 条 op 执行报错:\n" + "\n".join(f"- {e}" for e in errors))
+
+    if has_images(Path(state.kb_dir)):
+        print("ℹ forms 插图 pass：交 harness 对照文档实况插图…")
         try:
-            _harness_fallback(state, ws_key, out, errors, plan_failed)
-            log.info("[forms] harness 兜底完成,产物 %s", out)
-        except Exception as exc:               # 兜底也失败:不弃产物,记 error.log 供人工补
-            errfile = write_node_error(state, "fill_forms",
-                                       f"harness 兜底失败（产物保留程序化填写成果）: {exc}\n"
-                                       + (f"程序化失败原因: {err}" if plan_failed else
-                                          "报错 op:\n" + "\n".join(f"- {e}" for e in errors)))
-            log.warning("[forms] 兜底失败已记 %s,产物保留", errfile)
+            _picture_pass(state, ws_key, out)
+            log.info("[forms] 插图 pass 完成,产物 %s", out)
+        except Exception as exc:
+            problems.append(f"插图 pass 失败: {exc}")
+
+    if problems:
+        errfile = write_node_error(state, "fill_forms",
+                                   "fill_forms 未完成（产物保留预填+已执行成果）:\n"
+                                   + "\n\n".join(problems))
+        log.warning("[forms] %d 项遗留已记 %s", len(problems), errfile)
     log.info("[forms] 产物 %s(%d 字节)", out, out.stat().st_size)
     return {"forms_docx_path": str(out)}
 

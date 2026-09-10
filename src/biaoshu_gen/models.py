@@ -10,11 +10,11 @@ from pydantic import BaseModel
 
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from .config import get_settings, runs_root
+from .config import REASONING_EFFORTS, get_settings, runs_root
 
 log = logging.getLogger(__name__)
 
@@ -32,15 +32,22 @@ _VALIDATION_RETRIES = 2
 _VALIDATION_RETRY_DELAY_S = 2.0
 
 
-def thinking_model_settings(llm_thinking: str) -> ModelSettings | None:
-    """LLM_THINKING → 请求体注入（DeepSeek V4 思考模式默认开，且思考模式拒绝强制
-    tool_choice——结构化输出 ToolOutput 在官方端点必 400，disabled 一刀解）。
-    空串/未知值返回 None，不加 model_settings，跟随 provider 默认（OpenRouter 无感）。
+def llm_model_settings(llm_thinking: str = "", llm_reasoning_effort: str = "") -> ModelSettings | None:
+    """LLM_THINKING / LLM_REASONING_EFFORT → 请求设置注入。
+
+    - thinking（DeepSeek V4 思考模式开关）：思考模式默认开且拒绝强制 tool_choice，
+      结构化输出 ToolOutput 在其官方端点必 400，官方直连需 disabled；OpenRouter
+      网关自会兼容。OpenAI SDK 不认识 thinking 字段，须经 extra_body 透传。
+    - reasoning_effort（推理力度）：pydantic-ai 原生 openai_reasoning_effort 直达
+      请求体，o 系/GPT-5 及兼容网关语义；不支持的服务端忽略该字段。
+    两项均空时不加 model_settings，跟随 provider 默认。
     """
-    if llm_thinking not in ("enabled", "disabled"):
-        return None
-    # OpenAI SDK 不认识 thinking 字段，须经 extra_body 透传（DeepSeek 官方文档约定）
-    return ModelSettings(extra_body={"thinking": {"type": llm_thinking}})
+    settings = OpenAIChatModelSettings()
+    if llm_thinking in ("enabled", "disabled"):
+        settings["extra_body"] = {"thinking": {"type": llm_thinking}}
+    if llm_reasoning_effort in REASONING_EFFORTS:
+        settings["openai_reasoning_effort"] = llm_reasoning_effort
+    return settings or None
 
 
 def make_agent(output_type: type[BaseModel], system_prompt: str, retries: int = 2) -> Agent:
@@ -56,7 +63,7 @@ def make_agent(output_type: type[BaseModel], system_prompt: str, retries: int = 
         http_client=httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_S),
     )
     model = OpenAIChatModel(s.llm_model, provider=provider,
-                            settings=thinking_model_settings(s.llm_thinking))
+                            settings=llm_model_settings(s.llm_thinking, s.llm_reasoning_effort))
     return Agent(model=model, output_type=output_type, system_prompt=system_prompt, retries=retries)
 
 

@@ -3,3 +3,4 @@ template_fields 字段可以另行使用LLM调用抽取，在抽取 template阶�
 只传outline的话需要进行测试
 
 2. 没有prompt cache的管理，好像配置deepseek 的endpoint有点问题
+3. 当前调试阶段串行执行完整个流程较长，在集成测试阶段可以并行化处理，parse和template并行 (facts+outline+body) 可以和fill阶段并行，然后再assemble

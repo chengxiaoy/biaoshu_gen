@@ -41,7 +41,7 @@ _MEDIA_REQUIREMENT = {
 MEDIA_SYSTEM = """你是标书图表生成专家，为技术方案小节生成表格或 mermaid 图。
 
 要求：
-1. 内容严格取材于给定正文与知识库材料，参数与数值不得虚构；材料没有的数据用（待填）占位
+1. 内容严格取材于给定正文与小节信息，参数与数值不得虚构；材料没有的数据用（待填）占位
 2. media_caption 为简短中文说明（10 字内，不带"表"/"图"字前缀）
 3. 图表要脱离正文也能被独立理解，信息不与正文句子简单重复
 """
@@ -54,19 +54,18 @@ MEDIA_TEMPLATE = """为以下小节生成一个{media_type}。
 【小节正文（取材依据与插入上下文）】
 {content}
 
-【企业知识库参考材料】
-{kb}
-
 {feedback}输出要求：type={media_type}；{requirement}；media_caption 为标题说明。
 """
 
 
 def build_media_prompt(sec_id: str, title: str, description: str, media_type: str,
-                       content: str, kb: str, feedback: str = "") -> str:
+                       content: str, feedback: str = "") -> str:
+    """媒体 prompt 只带小节信息与正文——不引入知识库材料（企业产品参数属正文
+    生成阶段的取材范围，图表按已生成的正文/要点编写即可，避免两处口径漂移）。"""
     fb = f"【上一轮生成未通过校验（必须修复）】\n{feedback}\n\n" if feedback else ""
     return MEDIA_TEMPLATE.format(
         sec_id=sec_id, title=title, description=description or "（无）",
-        media_type=media_type, content=content or "（无）", kb=kb or "（无）",
+        media_type=media_type, content=content or "（无）",
         feedback=fb, requirement=_MEDIA_REQUIREMENT[media_type],
     )
 
@@ -80,6 +79,7 @@ INSERT_SYSTEM = """你是标书排版助手，为已生成的图表挑选正文�
 1. 插到与其内容最相关的段落之前，使图文紧邻
 2. 不打断并列结构（编号/列表段落中间不插）
 3. 尽量不插在最前（index=0）影响开篇，除非正文只有一段
+4. 如果正文中已有类似图表，无需再次插入请返回 -1
 """
 
 INSERT_TEMPLATE = """【媒体类型】{media_type}

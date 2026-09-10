@@ -15,9 +15,12 @@ def _fake_run(captured):
     return fake
 
 
-def _patch_fill_harness(monkeypatch, captured):
-    """fill_forms 的 harness 兜底经 ff 模块调用 run_harness_task，故 patch 该模块。"""
+def _patch_fill_harness(monkeypatch, captured=None):
+    """patch fill_forms 的 harness 兜底(kb 有图时必触发);返回 captured 调用记录列表。"""
+    if captured is None:
+        captured = []
     monkeypatch.setattr(ff, "run_harness_task", _fake_run(captured))
+    return captured
 
 
 def _base_state(tmp_path: Path, monkeypatch) -> BidState:
@@ -110,12 +113,14 @@ _PLAN = {"plan": [
 
 
 def test_fill_forms_executes_llm_plan(tmp_path: Path, monkeypatch):
-    """非 harness:LLM 直出 plan,python 经 run_fill_plan 确定性执行落盘。"""
+    """LLM 直出 plan,python 经 run_fill_plan 确定性执行落盘;kb 有图时仍触发一次
+    harness 插图 pass(feedback #86 终版:插图位置由 harness 自主决定)。"""
     from docx import Document
 
     state = _forms_state(tmp_path, monkeypatch)
     make = _fake_fill_make([_PLAN])
     monkeypatch.setattr(ff, "make_agent", make)
+    captured = _patch_fill_harness(monkeypatch)
 
     updates = ff.fill_forms_node(state)
     assert updates["forms_docx_path"].endswith(str(Path("06_fill/forms/forms.docx")))
@@ -125,34 +130,34 @@ def test_fill_forms_executes_llm_plan(tmp_path: Path, monkeypatch):
     prompt = make.calls[0]
     assert "模板可填点地图" in prompt and "项目名称" in prompt       # 地图预注入
     assert len(make.calls) == 1                                    # 无报错不回炉
+    assert len(captured) == 1 and "insert_picture_after" in captured[0][1]  # kb 有图:插图 pass 照跑
 
 
-def test_fill_forms_falls_back_to_harness_on_execution_errors(tmp_path, monkeypatch):
-    """执行报错 -> 不回炉重出 plan,转 harness 兜底:prompt 带报错清单与当前产物地图;
-    兜底接管后不再记 error.log,产物照常返回(feedback #78 先程序化再 harness 兜底)。"""
+def test_fill_forms_execution_errors_logged_not_harnessed(tmp_path, monkeypatch):
+    """执行报错 -> 不回炉重出 plan,也不交 harness(填 阶段 harness 只插图):报错 op 记
+    error.log 供人工补,产物保留已执行成果;插图 pass 照跑但 prompt 不含报错清单。"""
     state = _forms_state(tmp_path, monkeypatch)
     bad = {"plan": [{"op": "label", "label": "不存在的段落：", "value": "x"},
                     {"op": "label", "label": "项目名称：", "value": "演示项目"}]}
     make = _fake_fill_make([bad])
     monkeypatch.setattr(ff, "make_agent", make)
-    captured = []
-    _patch_fill_harness(monkeypatch, captured)
+    captured = _patch_fill_harness(monkeypatch)
 
     updates = ff.fill_forms_node(state)
     assert len(make.calls) == 1                                    # plan 通道单次,无修正轮
-    assert len(captured) == 1                                      # 兜底恰好发起一次
+    assert len(captured) == 1                                      # harness 只发起插图 pass
     prompt = captured[0][1]
-    assert "不存在的段落" in prompt                                # 报错清单进兜底 prompt
-    assert "模板可填点地图" in prompt and "项目名称" in prompt       # 地图基于当前产物
+    assert "插图" in prompt and "不存在的段落" not in prompt        # 纯插图任务,无报错清单
     assert updates["forms_docx_path"] and Path(updates["forms_docx_path"]).exists()
-    assert not (run_dir(state) / "06_fill" / "fill_forms.error.log").exists()
     from docx import Document as _D
     assert any("演示项目" in p.text for p in _D(updates["forms_docx_path"]).paragraphs)
+    errlog = run_dir(state) / "06_fill" / "fill_forms.error.log"
+    assert "不存在的段落" in errlog.read_text(encoding="utf-8")   # 报错 op 留痕供人工补
 
 
-def test_fill_forms_falls_back_to_harness_on_plan_failure(tmp_path, monkeypatch):
-    """plan 两次校验均失败 -> 程序化通道放弃,兜底做全量填写(prompt 无报错清单,
-    明示全量填写与范围);产物保留(预填底稿 + 兜底补填)。
+def test_fill_forms_plan_failure_logged_keeps_product(tmp_path, monkeypatch):
+    """plan 两次校验均失败 -> 记 error.log 放行(产物=预填底稿);插图 pass 照常发起,
+    不做全量兜底填写(harness 只插图)。
 
     失败取「空 plan」(过 Pydantic、被节点 _validate 拒)而非非法 op——FillOp.op
     收紧为 Literal 后,非法值在 pydantic-ai 输出校验层抛 UnexpectedModelBehavior,
@@ -161,33 +166,32 @@ def test_fill_forms_falls_back_to_harness_on_plan_failure(tmp_path, monkeypatch)
     bad = {"plan": []}
     make = _fake_fill_make([bad, bad])                             # 两次都非法
     monkeypatch.setattr(ff, "make_agent", make)
-    captured = []
-    _patch_fill_harness(monkeypatch, captured)
+    captured = _patch_fill_harness(monkeypatch)
 
     updates = ff.fill_forms_node(state)
     assert len(make.calls) == 2                                    # 校验重试一次后放弃
-    assert len(captured) == 1
-    assert "全量" in captured[0][1]
-    assert updates["forms_docx_path"]
+    assert len(captured) == 1                                      # 插图 pass 照跑
+    assert "插图" in captured[0][1] and "全量" not in captured[0][1]
+    assert updates["forms_docx_path"] and Path(updates["forms_docx_path"]).exists()
+    errlog = run_dir(state) / "06_fill" / "fill_forms.error.log"
+    assert "程序化填写失败" in errlog.read_text(encoding="utf-8")
 
 
-def test_fill_forms_fallback_failure_keeps_product(tmp_path, monkeypatch):
-    """兜底也失败(如 HARNESS_* 未配置):不弃产物,记 error.log 供人工补(feedback:
-    程序化成果保留),产物路径照常返回。"""
+def test_fill_forms_execution_and_picture_failures_both_logged(tmp_path, monkeypatch):
+    """报错 op 与插图 pass 失败同 run 发生:error.log 合并记录两项(覆盖写,须一次收齐),
+    产物保留程序化成果。"""
     state = _forms_state(tmp_path, monkeypatch)
     bad = {"plan": [{"op": "label", "label": "不存在的段落：", "value": "x"}]}
-    make = _fake_fill_make([bad])
-    monkeypatch.setattr(ff, "make_agent", make)
+    monkeypatch.setattr(ff, "make_agent", _fake_fill_make([bad]))
 
     def boom(task):
         raise RuntimeError("HARNESS_API_KEY 未配置")
     monkeypatch.setattr(ff, "run_harness_task", boom)
 
     updates = ff.fill_forms_node(state)
-    assert updates["forms_docx_path"] and Path(updates["forms_docx_path"]).exists()
-    errlog = run_dir(state) / "06_fill" / "fill_forms.error.log"
-    assert "兜底失败" in errlog.read_text(encoding="utf-8")
-    assert "不存在的段落" in errlog.read_text(encoding="utf-8")   # 报错 op 留痕
+    assert Path(updates["forms_docx_path"]).exists()               # 产物保留
+    text = (run_dir(state) / "06_fill" / "fill_forms.error.log").read_text(encoding="utf-8")
+    assert "不存在的段落" in text and "插图 pass 失败" in text     # 两项合并留痕
 
 
 def test_deviation_skipped_without_template(tmp_path: Path, monkeypatch):
@@ -214,13 +218,13 @@ def test_fill_prompts_preinject_context(tmp_path: Path, monkeypatch):
     state = _forms_state(tmp_path, monkeypatch)
     bad = {"plan": [{"op": "label", "label": "不存在的段落：", "value": "x"}]}
     monkeypatch.setattr(ff, "make_agent", _fake_fill_make([bad]))
-    captured = []
-    _patch_fill_harness(monkeypatch, captured)
+    captured = _patch_fill_harness(monkeypatch)
 
     ff.fill_forms_node(state)
     prompt = captured[0][1]
     assert "模板可填点地图" in prompt and "项目名称" in prompt   # 地图已注入
-    assert "facts.yaml 全文" in prompt and "90 天" in prompt    # facts 已注入
+    assert "facts.yaml" in prompt and "某某科技" in prompt       # facts(企业资料/模板字段)已注入
+    assert "90 天" not in prompt                                 # schedule 等正文向字段被精简出 fill prompt
     assert "企业信息摘要" in prompt and "CMMI5" in prompt       # 企业信息摘要已注入
     assert "营业执照.jpg" in prompt                              # 图片绝对路径已注入
 
@@ -277,10 +281,12 @@ def test_fill_forms_uses_part_when_present(tmp_path: Path, monkeypatch):
     plan = {"plan": [{"op": "label", "label": "项目名称：", "value": "演示项目"}]}
     make = _fake_fill_make([plan])
     monkeypatch.setattr(ff, "make_agent", make)
+    captured = _patch_fill_harness(monkeypatch)
 
     updates = ff.fill_forms_node(state)
     texts = [p.text for p in Document(updates["forms_docx_path"]).paragraphs if p.text.strip()]
     assert "投标函（格式）" in texts                              # 来自 part
+    assert len(captured) == 1 and str(captured[0][2][0]).endswith("forms.docx")  # 兜底(插图)产出产物
 
 
 def test_fill_forms_falls_back_to_whole_template_without_part(tmp_path: Path, monkeypatch):
@@ -290,10 +296,12 @@ def test_fill_forms_falls_back_to_whole_template_without_part(tmp_path: Path, mo
     state = state.model_copy(update={"template_parts": {}})     # 无 parts(老 run)
     make = _fake_fill_make([_PLAN])
     monkeypatch.setattr(ff, "make_agent", make)
+    captured = _patch_fill_harness(monkeypatch)
 
     updates = ff.fill_forms_node(state)
     doc = Document(updates["forms_docx_path"])
     assert doc.tables[0].cell(1, 1).text == "工业机器人"          # 整模板为底稿执行成功
+    assert len(captured) == 1                                     # 插图 pass 照跑
 
 
 
@@ -328,11 +336,13 @@ def test_fill_forms_skips_label_ops_covered_by_prefill(tmp_path, monkeypatch):
     ]}
     make = _fake_fill_make([plan])
     monkeypatch.setattr(ff, "make_agent", make)
+    captured = _patch_fill_harness(monkeypatch)
 
     updates = ff.fill_forms_node(state)
     assert updates["forms_docx_path"]                        # 未因 miss 报错软失败
     texts = [p.text for p in Document(updates["forms_docx_path"]).paragraphs]
     assert any("演示项目" in t and "模型自拟名称" not in t for t in texts)  # 预填值生效,op 被跳过
+    assert len(captured) == 1                                # 插图 pass 照跑
 
 
 def test_fill_forms_drops_manual_placeholder_ops(tmp_path: Path, monkeypatch):
@@ -351,6 +361,7 @@ def test_fill_forms_drops_manual_placeholder_ops(tmp_path: Path, monkeypatch):
     ]}
     make = _fake_fill_make([plan])
     monkeypatch.setattr(ff, "make_agent", make)
+    captured = _patch_fill_harness(monkeypatch)
 
     updates = ff.fill_forms_node(state)
     doc = Document(updates["forms_docx_path"])
@@ -359,3 +370,43 @@ def test_fill_forms_drops_manual_placeholder_ops(tmp_path: Path, monkeypatch):
     assert not any("待人工填写" in t for t in texts)
     all_cells = [c.text for t in doc.tables for r in t.rows for c in r.cells]
     assert "待补" not in "".join(all_cells) and "工业机器人" in all_cells   # 占位格未写,正常格已写
+    assert len(captured) == 1                                             # 插图 pass 照跑
+
+
+def test_fill_forms_hands_pictures_to_harness(tmp_path: Path, monkeypatch):
+    """plan 不含 picture op(feedback #86 终版):程序化只管文字/表格;kb 有图时 plan 成功
+    仍触发 harness 插图 pass,由 agent 对照文档实况自主决定插入位置(prompt 含插图任务
+    与 kb 图片清单;prompt 只含插图指令)。"""
+    from docx import Document
+
+    state = _forms_state(tmp_path, monkeypatch)
+    plan = {"plan": [{"op": "label", "label": "项目名称：", "value": "演示项目"}]}
+    make = _fake_fill_make([plan])
+    monkeypatch.setattr(ff, "make_agent", make)
+    captured = _patch_fill_harness(monkeypatch)
+
+    updates = ff.fill_forms_node(state)
+    assert any("演示项目" in p.text
+               for p in Document(updates["forms_docx_path"]).paragraphs)   # label 已程序化执行
+    assert len(captured) == 1                                              # kb 有图触发插图 pass
+    prompt = captured[0][1]
+    assert "insert_picture_after" in prompt                              # 自主插图职责下放
+    assert "营业执照.jpg" in prompt                                        # kb 图片清单已注入
+    assert not (run_dir(state) / "06_fill" / "fill_forms.error.log").exists()
+
+
+def test_fill_forms_picture_pass_failure_logged(tmp_path: Path, monkeypatch):
+    """插图 pass 兜底失败:产物保留程序化成果,error.log 记插图未完成。"""
+    state = _forms_state(tmp_path, monkeypatch)
+    make = _fake_fill_make([{"plan": [{"op": "label", "label": "项目名称：", "value": "演示项目"}]}])
+    monkeypatch.setattr(ff, "make_agent", make)
+
+    def boom(task):
+        raise RuntimeError("HARNESS_API_KEY 未配置")
+    monkeypatch.setattr(ff, "run_harness_task", boom)
+
+    updates = ff.fill_forms_node(state)
+    assert Path(updates["forms_docx_path"]).exists()                       # 产物保留
+    errlog = run_dir(state) / "06_fill" / "fill_forms.error.log"
+    text = errlog.read_text(encoding="utf-8")
+    assert "插图" in text and "HARNESS_API_KEY 未配置" in text

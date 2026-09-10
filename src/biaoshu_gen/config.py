@@ -5,6 +5,9 @@ from pathlib import Path
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# LLM_REASONING_EFFORT 合法值（validator 与 models.llm_model_settings 共用,单一来源）
+REASONING_EFFORTS = frozenset(("minimal", "low", "medium", "high"))
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -56,6 +59,20 @@ class Settings(BaseSettings):
         v = v.strip().lower()
         return v if v in ("enabled", "disabled") else ""
 
+    # 推理力度（pydantic-ai 原生 openai_reasoning_effort 直达请求体）：o 系/GPT-5 及
+    # 兼容网关语义 minimal/low/medium/high；留空跟随 provider 默认；未知值归空。
+    llm_reasoning_effort: str = Field(
+        default="",
+        validation_alias=AliasChoices("LLM_REASONING_EFFORT", "REASONING_EFFORT"),
+    )
+
+    @field_validator("llm_reasoning_effort")
+    @classmethod
+    def _normalize_reasoning_effort(cls, v: str) -> str:
+        """只认 REASONING_EFFORTS 中的值（大小写不敏感），其余归空 = 跟随 provider 默认。"""
+        v = v.strip().lower()
+        return v if v in REASONING_EFFORTS else ""
+
     @field_validator("llm_base_url")
     @classmethod
     def _strip_completions_path(cls, v: str) -> str:
@@ -101,7 +118,7 @@ class Settings(BaseSettings):
     body_review_max_rounds: int = 1
     revise_max_rounds: int = 1         # review→revise 只修一轮；数据缺口类已不计入 FAIL，多轮收益低
     word_tolerance: float = 1
-    harness_max_turns: int = 100
+    harness_max_turns: int = 20    # fill 插图 pass 等单任务通道,长上限只会烧 token 不收敛
     kb_top_k: int = 5
     body_concurrency: int = 6         # 正文按三级小节并发生成的并发数
     parse_concurrency: int = 6        # parse 分组抽取的并发数(#69)

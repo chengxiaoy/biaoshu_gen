@@ -128,10 +128,14 @@ def build_fill_context(state: BidState, tpl_doc: Document | None = None) -> str:
             parts.append(FILL_POINT_MAP_INTRO + "\n\n"
                          + dump_fill_points(Document(str(tpl))))
 
-    facts = d / "03_facts.yaml"
-    if facts.exists():
+    facts_yaml = d / "03_facts.yaml"
+    if facts_yaml.exists():
+        facts = from_yaml_file(GlobalFacts, facts_yaml)
+        facts.schedule = ""
+        facts.staffing = ""
+        facts.extra = []
         parts.append("【facts.yaml 全文（企业资料/模板字段/承诺以此为准）】\n"
-                     + facts.read_text(encoding="utf-8"))
+                     + facts.model_dump_json())
 
     metadata = d / "01_parse" / "metadata.yaml"
     if metadata.exists():

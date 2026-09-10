@@ -28,7 +28,7 @@ cp docs/标书模板_软件.docx data/tender/标书模板.docx
 ## 分阶段使用（人工控制点：03_facts.yaml / 04_outline.yaml 可编辑后续跑）
 
 ```bash
-poetry run biaoshu init --tender data/tender/服务招标文件.docx --kb data/company
+poetry run biaoshu init --tender data/tender/货物招标文件.docx --kb data/company
 poetry run biaoshu parse      # 招标解析（按目录分节阅读）→ 01_parse/
 poetry run biaoshu template   # 响应模板抽取（harness）→ 02_template/
 poetry run biaoshu facts      # 全局事实 → 03_facts.yaml（可人工编辑）

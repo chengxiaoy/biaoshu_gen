@@ -138,10 +138,10 @@ def _drop_wal(run_dir: Path) -> None:
         p.unlink(missing_ok=True)
 
 
-def _run_stage(stage: str | None, run_id_opt: str | None) -> None:
+def _run_stage(stage: str | None, run_id_opt: str | None, graph=None) -> None:
     rid = _resolve_run_id(run_id_opt)
     run = _load_run(rid)
-    graph = _build_graph_for_run(runs_root() / rid)
+    graph = graph or _build_graph_for_run(runs_root() / rid)   # run 全流程复用同一连接
     snap = graph.get_state({"configurable": {"thread_id": rid}})
     initial = {k: run[k] for k in INIT_FIELDS if run.get(k)} if not snap.values else None
     try:
@@ -297,8 +297,18 @@ for _stage in STAGE_ORDER:
 
 @app.command()
 def run(run_id: str | None = typer.Option(None, "--run-id")) -> None:
-    """全自动执行全部流程（端到端冒烟）。"""
-    _run_stage(None, run_id)
+    """全自动执行全部流程（端到端冒烟），逐阶段推进。
+
+    每阶段成功即备份 checkpoint（checkpoints/<stage>.sqlite）——之前一次 invoke 到
+    END 时 stage=None 恒不备份，rerun 任何阶段都会报"没有 <前序> 阶段的 checkpoint
+    备份"。已完成的阶段经 checkpoint 断点续跑语义跳过（execute_stage 的 beyond 判定），
+    从中断的阶段继续，中断时正在执行的节点整体重跑（body 等节点内有叶子级幂等）。
+    graph/sqlite 连接全程复用（逐阶段重建会泄漏连接，Windows 下即文件锁）。
+    """
+    rid = _resolve_run_id(run_id)
+    graph = _build_graph_for_run(runs_root() / rid)
+    for stage in STAGE_ORDER:
+        _run_stage(stage, rid, graph)
 
 
 @app.command()

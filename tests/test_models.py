@@ -1,5 +1,5 @@
-"""make_agent 工厂：output_type / system_prompt / retries 透传给 PydanticAI Agent。"""
-from biaoshu_gen.models import make_agent, thinking_model_settings
+"""make_agent 工厂：output_type / system_prompt / retries / 请求设置透传给 PydanticAI Agent。"""
+from biaoshu_gen.models import llm_model_settings, make_agent
 from biaoshu_gen.schemas import GlobalFacts
 
 
@@ -8,14 +8,16 @@ def test_make_agent_builds_agent_with_output_type():
     assert agent.output_type is GlobalFacts
 
 
-def test_thinking_model_settings():
-    """LLM_THINKING 映射：enabled/disabled 经 extra_body 注入，其余不注入。"""
-    off = thinking_model_settings("disabled")
-    assert off == {"extra_body": {"thinking": {"type": "disabled"}}}
-    on = thinking_model_settings("enabled")
-    assert on == {"extra_body": {"thinking": {"type": "enabled"}}}
-    assert thinking_model_settings("") is None
-    assert thinking_model_settings("auto") is None
+def test_llm_model_settings():
+    """LLM_THINKING / LLM_REASONING_EFFORT 映射：合法值注入（thinking 经 extra_body、
+    reasoning_effort 走 pydantic-ai 原生字段直达请求体），空值/未知值不注入跟随默认。"""
+    assert llm_model_settings("disabled", "") == {
+        "extra_body": {"thinking": {"type": "disabled"}}}
+    assert llm_model_settings("enabled", "high") == {
+        "extra_body": {"thinking": {"type": "enabled"}}, "openai_reasoning_effort": "high"}
+    assert llm_model_settings("", "low") == {"openai_reasoning_effort": "low"}
+    assert llm_model_settings("", "") is None
+    assert llm_model_settings("auto", "ultra") is None       # 未知值不注入
 
 
 def test_run_sync_retries_on_model_behavior_error(monkeypatch):
