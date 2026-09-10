@@ -136,6 +136,64 @@ def test_markdown_mermaid_degrades_to_code_text(monkeypatch):
     assert any("flowchart LR" in x.text for x in doc.paragraphs)
 
 
+def test_adopt_image_rels_cache_keyed_by_content_not_source_rid():
+    """#88:共享 img_cache 跨源文档时,同号 rId 不同图不得串图——assemble 中
+    forms 桶先入的 rId16(身份证扫描件)曾使 technical part 同号 rId16(mermaid
+    渲染图)缓存命中,1.2.2 流程图被整体改写成身份证图。cache 须按图片内容
+    (SHA1)去重;同内容跨文档仍应复用同一 rId(包级去重语义保留)。"""
+    from io import BytesIO
+
+    from biaoshu_gen.docx_io import append_elements_before_sectpr
+
+    png_a = _MIN_PNG
+    png_b = _MIN_PNG.replace(b"\x05\x00\x01", b"\x06\x00\x01")   # 换 IDAT 像素字节
+    assert png_a != png_b
+
+    def _pic_el(doc):
+        for el in doc.element.body.iterchildren():
+            if any(n.tag == qn("a:blip") for n in el.iter()):
+                return el
+        raise AssertionError("文档中没有图片段落")
+
+    src_forms, src_tech = Document(), Document()
+    src_forms.add_picture(BytesIO(png_a))     # 两个 fresh doc 的下一空闲 rId 同号
+    src_tech.add_picture(BytesIO(png_b))      # (均为 rId9),复现跨文档撞号
+
+    dest = Document()
+    cache: dict = {}                          # assemble 全程共享的 img_cache
+    append_elements_before_sectpr(dest, [_pic_el(src_forms)],
+                                   src_doc=src_forms, img_cache=cache)
+    append_elements_before_sectpr(dest, [_pic_el(src_tech)],
+                                   src_doc=src_tech, img_cache=cache)
+
+    rids = [b.get(qn("r:embed")) for b in dest.element.body.iter(qn("a:blip"))]
+    assert rids[0] != rids[1]                 # 不同图不得串到同一个 rId
+    assert {dest.part.rels[r].target_part.blob for r in rids} == {png_a, png_b}
+
+    src_dup = Document()                      # 第三文档同内容图:按 SHA1 复用
+    src_dup.add_picture(BytesIO(png_a))
+    append_elements_before_sectpr(dest, [_pic_el(src_dup)],
+                                   src_doc=src_dup, img_cache=cache)
+    rids = [b.get(qn("r:embed")) for b in dest.element.body.iter(qn("a:blip"))]
+    assert rids[-1] == rids[0]                # 同内容跨文档仍去重为同一 rId
+
+    # 两跳链(assemble 真实形态): scratch -> 中转 part -> 终稿 dest。
+    # 第一跳把图注册进 part 的 rId16,若缓存值不辨 dest,第二跳会把 part 的
+    # rId16 当成 dest 的 rId16 填回去——dest 里同号关系是另一张图即串图。
+    part = Document()                         # 中转容器(rels 空闲号与 dest 无关)
+    part.add_paragraph("锚")
+    scratch = Document()
+    scratch.add_picture(BytesIO(png_b))
+    append_elements_before_sectpr(part, [_pic_el(scratch)],
+                                  src_doc=scratch, img_cache=cache)   # hop1
+    final = Document()
+    part_els = [_pic_el(part)]
+    append_elements_before_sectpr(final, part_els, src_doc=part,
+                                   img_cache=cache)                    # hop2
+    rid = [b.get(qn("r:embed")) for b in final.element.body.iter(qn("a:blip"))][0]
+    assert final.part.rels[rid].target_part.blob == png_b   # 内容跟着走,不串图
+
+
 def test_number_headings_three_levels():
     """#80:三级目录加章节号——#→1. / ##→1.1 / ###→1.1.1,同级递增、升级清零。"""
     from biaoshu_gen.docx_io import number_headings

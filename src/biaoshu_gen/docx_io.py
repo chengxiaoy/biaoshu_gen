@@ -648,7 +648,16 @@ def adopt_image_rels(dest_doc: DocumentType, src_doc: DocumentType,
 
     不迁移则 a:blip@r:embed / v:imagedata@r:id 仍指源文档关系表——Word 打开
     显示空白，而 inline_shapes 计数照常（只数 XML 节点不解析关系）。
+
+    cache 键为图片内容（SHA1），值为 (dest part, rId) 二元组——rId 只在其所属
+    dest 的关系表内有意义，命中时必须校验 dest 一致才可复用（#88：assemble
+    的 img_cache 跨桶共享，曾按裸源 rId 缓存且不辨 dest，forms 桶先入的
+    rId16[身份证]使 technical part 同号 rId16[mermaid 渲染图]两跳连环命中，
+    正文流程图被整体改写成身份证图）。缓存的 part 引用同时钉住对象防
+    GC 后地址复用。dest 不一致时走 get_or_add_image 重注册——其对同 blob
+    幂等（已有部件则复用），跨 dest 重复注册无副作用。
     """
+    from hashlib import sha1
     from io import BytesIO
 
     if cache is None:
@@ -665,15 +674,17 @@ def adopt_image_rels(dest_doc: DocumentType, src_doc: DocumentType,
             old = node.get(attr)
             if not old:
                 continue
-            if old in cache:
-                node.set(attr, cache[old])
-                continue
             try:
                 blob = src_doc.part.rels[old].target_part.blob
             except KeyError:
                 continue                           # 源文档无此关系,保持原样
+            key = sha1(blob).hexdigest()
+            hit = cache.get(key)
+            if hit is not None and hit[0] is dest_doc.part:
+                node.set(attr, hit[1])
+                continue
             new_rid, _ = dest_doc.part.get_or_add_image(BytesIO(blob))
-            cache[old] = new_rid
+            cache[key] = (dest_doc.part, new_rid)
             node.set(attr, new_rid)
 
 
