@@ -6,6 +6,8 @@ plan + harness 兜底编排在 nodes/fill_forms.py，偏离表在 nodes/deviatio
 import logging
 from pathlib import Path
 
+import yaml
+
 from docx import Document
 
 from .fill_skill import (
@@ -140,6 +142,20 @@ def build_fill_context(state: BidState, tpl_doc: Document | None = None) -> str:
     metadata = d / "01_parse" / "metadata.yaml"
     if metadata.exists():
         parts.append("【metadata.yaml 全文】\n" + metadata.read_text(encoding="utf-8"))
+
+    # 采购清单（货物说明一览表/供货范围的事实来源）：plan prompt 的填写规则引用
+    # 「预注入的采购清单」，此处即其来源——缺失时一览表只能靠模型猜，必然编造
+    req_yaml = d / "01_parse" / "requirements.yaml"
+    if req_yaml.exists():
+        try:
+            purchase = (yaml.safe_load(req_yaml.read_text(encoding="utf-8")) or {}
+                        ).get("purchase_list") or []
+        except yaml.YAMLError:
+            purchase = []
+        if purchase:
+            parts.append("【采购清单（requirements.yaml purchase_list 全文；货物说明一览表/"
+                         "供货范围按此逐行填入对应表格；金额/参数清单未给的字段留空，禁止编造）】\n"
+                         + "\n".join(f"- {item}" for item in purchase))
 
     ledger = build(Path(state.kb_dir))
     if ledger.texts:

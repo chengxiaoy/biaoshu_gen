@@ -55,7 +55,9 @@ def _base_state(tmp_path: Path, monkeypatch) -> BidState:
     (parse / "tender.md").write_text("# 招标公告", encoding="utf-8")
     (parse / "invalidation.yaml").write_text("items: []\n", encoding="utf-8")
     (parse / "metadata.yaml").write_text("project_name: 演示\n", encoding="utf-8")
-    (parse / "requirements.yaml").write_text("tech_requirements: []\n", encoding="utf-8")
+    (parse / "requirements.yaml").write_text(
+        "tech_requirements: []\npurchase_list:\n  - 工业机器人数字孪生套装，数量10套\n",
+        encoding="utf-8")
     (parse / "scoring.yaml").write_text("technical_rules: []\n", encoding="utf-8")
     (run_dir(state) / "03_facts.yaml").write_text("schedule: 90 天\n", encoding="utf-8")
     return state
@@ -449,6 +451,19 @@ def test_picture_anchor_hints_frames_and_sections(tmp_path: Path, monkeypatch):
     assert "法定代表人（单位负责人）身份证正反面复印件" in hints   # 法人 → 法定代表人框行
     assert "信用信息查询" in hints and "insert_picture_after" in hints  # 无框 → 标题段后
     assert "生产线.png → 无建议" in hints                 # 长尾交 agent 判断
+
+
+def test_fill_prompt_injects_purchase_list(tmp_path: Path, monkeypatch):
+    """采购清单(requirements.yaml purchase_list)注入 fill prompt——货物说明一览表的
+    唯一事实来源；plan 填写规则一直引用「预注入的采购清单」，此前实际从未注入。"""
+    state = _forms_state(tmp_path, monkeypatch)
+    make = _fake_fill_make([_PLAN])
+    monkeypatch.setattr(ff, "make_agent", make)
+    _patch_fill_harness(monkeypatch)
+
+    ff.fill_forms_node(state)
+    prompt = make.calls[0]
+    assert "采购清单" in prompt and "工业机器人数字孪生套装，数量10套" in prompt
 
 
 def test_fill_forms_picture_pass_skips_when_no_anchor(tmp_path: Path, monkeypatch):
