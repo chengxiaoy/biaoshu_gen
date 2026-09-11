@@ -77,14 +77,14 @@ def _ops_of(ops) -> list[dict]:
     return [op.model_dump(exclude_none=True) for op in ops]
 
 
-def _picture_pass(state: BidState, ws_key: str, out: Path) -> None:
+def _picture_pass(state: BidState, ws_key: str, out: Path, hints: str) -> None:
     """插图 pass：fill 阶段 harness 的唯一任务（feedback #86 终版）——agent 对照
     产物实况自主决定哪些图片插入、插在哪段之后；不做任何其他填写。
 
-    #89：粘贴框（复印件单列表）规则 + 常见证照的确定性预匹配清单（代码给锚点
-    建议，agent 核对执行、只兜清单外长尾）。工作区与程序化路径共用
-    （prepare_agent_workspace 幂等投放 tender/scoring/kb/fill_skill），地图基于
-    **当前产物**。产物缺失校验天然满足（out 已存在）。
+    #89：粘贴框（复印件单列表）规则 + 常见证照的确定性预匹配清单（hints 由
+    调用方基于产物算好传入，兼作触发门槛与空跑校验依据）。工作区与程序化
+    路径共用（prepare_agent_workspace 幂等投放 tender/scoring/kb/fill_skill），
+    地图基于**当前产物**。产物缺失校验天然满足（out 已存在）。
     """
     run = run_dir(state)
     ws = prepare_agent_workspace(
@@ -94,7 +94,7 @@ def _picture_pass(state: BidState, ws_key: str, out: Path) -> None:
     prod = Document(str(out))                  # 产物只开一次：可填点地图与锚点预匹配共用
     prompt = (PICTURE_SYSTEM + "\n\n" + build_picture_prompt(str(out))
               + "\n\n" + build_fill_context(state, tpl_doc=prod)
-              + "\n\n" + picture_anchor_hints(state, prod)
+              + "\n\n" + hints
               + "\n\n" + environment_notes())
     run_harness_task(HarnessTask(prompt=prompt, cwd=ws, expected_outputs=[out]))
 
@@ -103,7 +103,7 @@ def _forms_core(state: BidState, ws_key: str = "") -> dict:
     facts = ensure_business_fields(state)       # 企业/法人/信用代码缺失则 mock 并回写 facts.yaml
     tpl_src = resolve_template_src(state, "forms")
     if not tpl_src:
-        print("ℹ 无响应模板，跳过 fill_forms 节点。")
+        log.info("[forms] 无响应模板，跳过 fill_forms 节点")
         return {"forms_docx_path": ""}
 
     run = run_dir(state)
@@ -179,12 +179,34 @@ def _forms_core(state: BidState, ws_key: str = "") -> dict:
         problems.append(f"{len(errors)} 条 op 执行报错:\n" + "\n".join(f"- {e}" for e in errors))
 
     if has_images(Path(state.kb_dir)):
-        print("ℹ forms 插图 pass：交 harness 对照文档实况插图…")
-        try:
-            _picture_pass(state, ws_key, out)
-            log.info("[forms] 插图 pass 完成,产物 %s", out)
-        except Exception as exc:
-            problems.append(f"插图 pass 失败: {exc}")
+        # 进度走 log 而非 print：「ℹ」等字符在 GBK 控制台/重定向下不可编码，
+        # print 抛 UnicodeEncodeError 会杀死整个节点（曾致插图 pass 未跑）
+        hints = picture_anchor_hints(state, Document(str(out)))
+        anchorable = any("无建议" not in line for line in hints.splitlines()[1:])
+        if not anchorable:
+            # 预匹配全「无建议」=本切片没有任何可挂锚点（如 forms_2 附加段），
+            # 跑 harness 只会空转——直接省一次调用
+            log.info("[forms] 本切片无可挂接图片锚点，跳过插图 pass")
+        else:
+            before = len(Document(str(out)).inline_shapes)
+            try:
+                _picture_pass(state, ws_key, out, hints)
+                # run_harness_task 只认「产物存在」，防不住会话被静默截断后空跑
+                # 「成功」（实测 9 轮 23s 流断、零插图照样返回 success）——按
+                # 新增图片数做内容级校验，空跑重试一次，仍空记 error.log
+                if len(Document(str(out)).inline_shapes) > before:
+                    log.info("[forms] 插图 pass 完成,新增 %d 张图,产物 %s",
+                             len(Document(str(out)).inline_shapes) - before, out)
+                else:
+                    log.warning("[forms] 插图 pass 未新增图片(疑似空跑/截断)，重试一次")
+                    _picture_pass(state, ws_key, out, hints)
+                    if len(Document(str(out)).inline_shapes) > before:
+                        log.info("[forms] 插图 pass 重试成功,产物 %s", out)
+                    else:
+                        problems.append("插图 pass 两次均未新增图片（harness 会话疑似被"
+                                        "截断，或 agent 判定无需插图），待插清单：\n" + hints)
+            except Exception as exc:
+                problems.append(f"插图 pass 失败: {exc}")
 
     if problems:
         errfile = write_node_error(state, "fill_forms",

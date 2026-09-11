@@ -6,9 +6,29 @@ from biaoshu_gen.nodes import deviation_table as dev
 from biaoshu_gen.nodes import fill_forms as ff
 from biaoshu_gen.state import BidState, run_dir
 
+# 1x1 PNG（假 harness 往产物插图用，无需 PIL）
+_PNG1 = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+         b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+         b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+
 
 def _fake_run(captured):
-    """假 harness：只记录调用，不动产物（程序化路径已生成真实 docx）。"""
+    """假 harness：记录调用并往产物里真插一张图（#89 内容级校验按新增图数判成功，
+    纯记录不动产物的假 harness 会被当成空跑触发重试）。"""
+    def fake(task):
+        captured.append((task.cwd, task.prompt, task.expected_outputs))
+        from docx import Document
+        out = task.expected_outputs[0]
+        d = Document(str(out))
+        d.add_picture(__import__("io").BytesIO(_PNG1))
+        d.save(str(out))
+        return task.expected_outputs
+    return fake
+
+
+def _fake_run_passive(captured):
+    """假 harness（空跑版）：只记录调用不动产物——模拟会话被静默截断后
+    「成功」返回但零工作的形态。"""
     def fake(task):
         captured.append((task.cwd, task.prompt, task.expected_outputs))
         return task.expected_outputs
@@ -89,7 +109,8 @@ def _fake_fill_make(responses: list[dict]):
 
 
 def _forms_state(tmp_path: Path, monkeypatch) -> BidState:
-    """含投标函填空与一览表的响应模板(facts 已 mock 企业资料)。"""
+    """含投标函填空/一览表/身份证粘贴框的响应模板(facts 已 mock 企业资料;
+    kb 含法人身份证——粘贴框锚点让插图 pass 有可挂接目标(#89 门槛))。"""
     monkeypatch.chdir(tmp_path)
     from docx import Document
 
@@ -99,8 +120,11 @@ def _forms_state(tmp_path: Path, monkeypatch) -> BidState:
     t = d.add_table(rows=2, cols=2)
     t.cell(0, 0).text = "序号"
     t.cell(0, 1).text = "名称"
+    frame = d.add_table(rows=1, cols=1)                      # 证照粘贴框(#89)
+    frame.cell(0, 0).text = "法定代表人（单位负责人）身份证正反面复印件"
     d.save(tpl)
     state = _base_state(tmp_path, monkeypatch)
+    (tmp_path / "kb" / "1、企业信息" / "法人身份证.png").write_bytes(_PNG1)
     from biaoshu_gen.business import ensure_business_fields
     ensure_business_fields(state)
     return state.model_copy(update={"template_docx_path": str(tpl)})
@@ -276,6 +300,8 @@ def test_fill_forms_uses_part_when_present(tmp_path: Path, monkeypatch):
     pd = Document()
     pd.add_paragraph("项目名称：__________")
     pd.add_paragraph("投标函（格式）")
+    frame = pd.add_table(rows=1, cols=1)                      # 粘贴框:插图 pass 的挂接锚点
+    frame.cell(0, 0).text = "法定代表人（单位负责人）身份证正反面复印件"
     pd.save(part)
     state = state.model_copy(update={"template_parts": {"forms": str(part)}})
     plan = {"plan": [{"op": "label", "label": "项目名称：", "value": "演示项目"}]}
@@ -423,6 +449,39 @@ def test_picture_anchor_hints_frames_and_sections(tmp_path: Path, monkeypatch):
     assert "法定代表人（单位负责人）身份证正反面复印件" in hints   # 法人 → 法定代表人框行
     assert "信用信息查询" in hints and "insert_picture_after" in hints  # 无框 → 标题段后
     assert "生产线.png → 无建议" in hints                 # 长尾交 agent 判断
+
+
+def test_fill_forms_picture_pass_skips_when_no_anchor(tmp_path: Path, monkeypatch):
+    """#89 门槛:kb 有图但本切片预匹配全「无建议」(无粘贴框也无对应小节)时
+    跳过插图 pass——不烧 harness 调用(附加段切片如 forms_2 常态如此)。"""
+    state = _with_template(tmp_path, monkeypatch, text="项目名称：__________")  # kb 仅营业执照.jpg,模板无锚点
+    make = _fake_fill_make([{"plan": [{"op": "label", "label": "项目名称：",
+                                       "value": "演示项目"}]}])
+    monkeypatch.setattr(ff, "make_agent", make)
+    captured = _patch_fill_harness(monkeypatch)
+
+    updates = ff.fill_forms_node(state)
+    assert len(captured) == 0                            # 无锚点:插图 pass 不触发
+    assert Path(updates["forms_docx_path"]).exists()
+    assert not (run_dir(state) / "06_fill" / "fill_forms.error.log").exists()
+
+
+def test_fill_forms_picture_pass_noop_retries_then_logged(tmp_path: Path, monkeypatch):
+    """#89 空跑校验:harness「成功」返回但产物零新增图(实测会话被静默截断)——
+    重试一次,仍空则记 error.log 附待插清单,产物保留。"""
+    state = _forms_state(tmp_path, monkeypatch)
+    make = _fake_fill_make([{"plan": [{"op": "label", "label": "项目名称：",
+                                       "value": "演示项目"}]}])
+    monkeypatch.setattr(ff, "make_agent", make)
+    captured: list = []
+    monkeypatch.setattr(ff, "run_harness_task", _fake_run_passive(captured))  # 空跑:只记录不插图
+
+    updates = ff.fill_forms_node(state)
+    assert len(captured) == 2                            # 空跑后重试了一次
+    errlog = run_dir(state) / "06_fill" / "fill_forms.error.log"
+    text = errlog.read_text(encoding="utf-8")
+    assert "未新增图片" in text and "法人身份证.png" in text    # 报告含待插清单
+    assert Path(updates["forms_docx_path"]).exists()     # 产物保留
 
 
 def test_fill_forms_picture_pass_failure_logged(tmp_path: Path, monkeypatch):

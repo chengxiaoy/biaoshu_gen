@@ -339,6 +339,15 @@ def main() -> None:
     import os
     import sys
 
+    # Windows GBK 控制台/重定向下 print 非 GBK 字符（ℹ/⚠）抛 UnicodeEncodeError 会
+    # 杀死节点（曾致插图 pass 未跑）——入口统一把两路输出切 UTF-8 容错替换，
+    # 进程内全部 print 与控制台编码解耦（pytest 捕获流无 reconfigure，静默跳过）
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     logging.basicConfig(level=logging.INFO, stream=sys.stderr,
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
