@@ -43,6 +43,20 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("HARNESS_MODEL", "HARNESS_MODEL_NAME"),
     )
+    # harness 思考力度（claude-agent-sdk 的 effort 档）：合法 low/medium/high/xhigh/max，
+    # 归空 = 不传、跟随 CLI 默认。默认 high——flash 档模型在 fill 插图任务上曾 9~13 轮
+    # 即中途收回合（#89 端到端取证），higher effort 引导先想清再动手。
+    harness_effort: str = Field(
+        default="high",
+        validation_alias=AliasChoices("HARNESS_EFFORT"),
+    )
+
+    @field_validator("harness_effort")
+    @classmethod
+    def _normalize_harness_effort(cls, v: str) -> str:
+        """只认 SDK EffortLevel 的值（大小写不敏感），其余归空 = 不传。"""
+        v = v.strip().lower()
+        return v if v in ("low", "medium", "high", "xhigh", "max") else ""
 
     # DeepSeek V4 思考模式开关（经 extra_body 注入 thinking 字段）：
     # V4 思考模式默认开启且拒绝强制 tool_choice，结构化输出（ToolOutput）在其官方端点必 400，

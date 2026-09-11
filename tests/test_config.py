@@ -95,3 +95,12 @@ def test_llm_reasoning_effort_normalized():
     assert Settings(_env_file=None, llm_reasoning_effort="minimal").llm_reasoning_effort == "minimal"
     assert Settings(_env_file=None, llm_reasoning_effort="").llm_reasoning_effort == ""
     assert Settings(_env_file=None, llm_reasoning_effort="ultra").llm_reasoning_effort == ""
+
+
+def test_harness_effort_default_high_and_normalized():
+    """harness 思考力度默认 high（#89：flash 档防中途收回合）；只认 SDK EffortLevel
+    的值（大小写不敏感），其余归空 = 不传。"""
+    assert Settings(_env_file=None).harness_effort == "high"
+    assert Settings(_env_file=None, harness_effort="  XHIGH ").harness_effort == "xhigh"
+    assert Settings(_env_file=None, harness_effort="max").harness_effort == "max"
+    assert Settings(_env_file=None, harness_effort="ultra").harness_effort == ""

@@ -69,6 +69,7 @@ async def _query_sdk(prompt: str, cwd: Path, max_turns: int) -> str:
         max_turns=max_turns,
         permission_mode="bypassPermissions",   # POC 本机受控工作区
         model=model,
+        effort=(s.harness_effort or None),     # 思考力度默认 high：flash 档防中途收回合（#89）
         setting_sources=[],                    # 跳过用户/项目 settings（其 ANTHROPIC_* 会覆盖注入配置）
         extra_args=extra_args,
         # 全面使用 .env 的 HARNESS_* 三件套（Anthropic 协议端点），
