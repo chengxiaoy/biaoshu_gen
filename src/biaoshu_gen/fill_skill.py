@@ -350,6 +350,33 @@ def insert_picture_after(doc, prefix: str, img: str, width_inch: float = 5.6,
     return _insert_picture_after_para(find_para(doc, prefix), img, width_inch, caption)
 
 
+def insert_picture_into_frame(doc, row_keyword: str, img: str,
+                              width_inch: float = 4.8) -> Paragraph:
+    """把图片插进粘贴框表格的指定行（按行内文字定位），行内标签文字保留在图上方。
+
+    模板的证照复印件位是单元格文字为「xxx 复印件」的单列框表（#89：身份证
+    曾被插在框外段后、框空置且自创图注重读）。图落格内而非框外；行内已有图
+    则跳过（重跑幂等）；只认单列表（多列数据表不碰）。找不到含关键词的框行
+    抛 RuntimeError（带提示便于 harness 自纠）。
+    """
+    kw = _norm_ws(row_keyword)
+    for t in doc.tables:
+        if len(t.columns) != 1:
+            continue                          # 粘贴框恒为单列；序号/报价等数据表不碰
+        for row in t.rows:
+            cell = row.cells[0]
+            if kw not in _norm_ws(cell.text):
+                continue
+            if any(p._element.findall(".//" + qn("w:drawing"))
+                   or p._element.findall(".//" + qn("w:pict")) for p in cell.paragraphs):
+                return cell.paragraphs[-1]    # 该行已有图，幂等跳过
+            p = cell.add_paragraph()
+            p.alignment = 1                   # center
+            p.add_run().add_picture(ensure_readable_img(img), width=Inches(width_inch))
+            return p
+    raise RuntimeError(f"找不到含 {row_keyword!r} 的粘贴框行；请核对框内文字（只匹配单列表格）")
+
+
 # ---------------- 声明式填空清单（一次执行、批量报错，压缩 harness 轮次） ----------------
 
 def _match_key(nk: str, alt: str | None, nhead: str) -> bool:

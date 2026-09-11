@@ -154,6 +154,57 @@ def build_fill_context(state: BidState, tpl_doc: Document | None = None) -> str:
     return "\n\n".join(parts)
 
 
+# #89 插图预匹配：kb 图片文件名关键词 -> 产物锚点建议。
+# (文件名关键词, 粘贴框行内文字关键词, 无框时的小节标题关键词)——行键先匹，
+# 无框才落到标题键；全部命中不到即「无建议」交 agent 按文档实况判断。
+# 行键须可区分（如「身份证正反面」会同时命中代理人/法定代表人两行，不采用；
+# 法人身份证在 2-1-1 小节的同名框由 prompt 规则 1 的示例覆盖）。
+_PICTURE_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]], ...] = (
+    (("法人身份证", "法定代表人身份证"), ("法定代表人",), ("身份证明",)),
+    (("授权代表身份证", "代理人身份证"), ("代理人",), ("授权委托书",)),
+    (("营业执照", "登记证书"), ("营业执照",), ("营业执照", "主体资格")),
+    (("信用中国", "政府采购网查询"), (), ("信用信息", "信用查询")),
+    (("资质证书", "资质"), (), ("特定资格", "资格条件", "资质")),
+    (("专利",), (), ("特定资格", "资格条件", "专利")),
+    (("职称",), (), ("项目人员", "人员安排", "项目负责人")),
+)
+_PICTURE_HINT_HEADER = ("【插图预匹配清单（代码按图片名↔文档锚点的确定性建议，核对后执行；"
+                        "标「无建议」的按文档实况判断；一张图可按需插多个框）】")
+
+
+def picture_anchor_hints(state: BidState, doc: Document) -> str:
+    """#89：kb 图片 -> 产物文档锚点（粘贴框行/小节标题）的确定性预匹配清单。
+
+    全自主判断曾致身份证插在粘贴框外（框空置+自创图注重读）、资质/专利图
+    整体漏插——常见证照的挂接由代码先给建议，agent 只核对执行与兜长尾。
+    """
+    imgs = build(Path(state.kb_dir)).images
+    if not imgs:
+        return ""
+    frames: list[str] = []                     # 粘贴框行内文字（单列表格逐行）
+    for t in doc.tables:
+        if len(t.columns) == 1:
+            frames.extend(r.cells[0].text.strip() for r in t.rows)
+    paras = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+
+    lines = [_PICTURE_HINT_HEADER]
+    for p in imgs:
+        rule = next((r for r in _PICTURE_RULES if any(k in p.name for k in r[0])), None)
+        rows = ([t for t in frames if any(k in t for k in rule[1])]
+                if rule else [])
+        secs = ([t for t in paras if len(t) <= 40 and any(k in t for k in rule[2])]
+                if rule else [])
+        if rows:
+            anchors = "；".join(f"粘贴框行「{t[:26]}」" for t in rows[:2])
+            lines.append(f"- {p.name} → {anchors}（insert_picture_into_frame，图进框内）")
+        elif secs:
+            lines.append(f"- {p.name} → 小节标题「{secs[0][:26]}」段后"
+                         "（insert_picture_after，图注只抄模板原文词）")
+        else:
+            lines.append(f"- {p.name} → 无建议，按文档实况判断")
+    return "\n".join(lines)
+
+
 def resolve_template_src(state: BidState, part: str | None) -> str:
     """fill 节点的模板源:优先对应 part(四分拆产物),缺失回退整模板。"""
     if part and state.template_parts.get(part) and Path(state.template_parts[part]).exists():

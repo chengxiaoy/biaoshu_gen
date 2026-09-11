@@ -391,8 +391,38 @@ def test_fill_forms_hands_pictures_to_harness(tmp_path: Path, monkeypatch):
     assert len(captured) == 1                                              # kb 有图触发插图 pass
     prompt = captured[0][1]
     assert "insert_picture_after" in prompt                              # 自主插图职责下放
+    assert "insert_picture_into_frame" in prompt                         # #89:粘贴框进图原语
+    assert "插图预匹配清单" in prompt                                     # #89:代码侧确定性锚点建议
     assert "营业执照.jpg" in prompt                                        # kb 图片清单已注入
     assert not (run_dir(state) / "06_fill" / "fill_forms.error.log").exists()
+
+
+def test_picture_anchor_hints_frames_and_sections(tmp_path: Path, monkeypatch):
+    """#89 插图预匹配清单:身份证类给粘贴框行锚点(图进框),信用类给小节标题锚点,
+    匹配不上的标「无建议」交 agent 兜长尾。"""
+    from docx import Document
+
+    from biaoshu_gen.fill_context import picture_anchor_hints
+
+    state = _base_state(tmp_path, monkeypatch)
+    kb = tmp_path / "kb" / "1、企业信息"
+    for name in ("法人身份证.png", "授权代表身份证.png", "信用中国查询.png", "生产线.png"):
+        (kb / name).write_bytes(b"\x89PNG mock")
+
+    d = Document()
+    d.add_paragraph("附件2-1-2 授权委托书(格式)")
+    d.add_paragraph("本授权书于      年    月    日签字生效，特此声明。")
+    frame = d.add_table(rows=2, cols=1)
+    frame.cell(0, 0).text = "代理人身份证正反面复印件"
+    frame.cell(1, 0).text = "法定代表人（单位负责人）身份证正反面复印件"
+    d.add_paragraph("附件2-5 信用信息查询")
+
+    hints = picture_anchor_hints(state, d)
+    assert "insert_picture_into_frame" in hints          # 框行建议走进框原语
+    assert "代理人身份证正反面复印件" in hints            # 授权代表 → 代理人框行
+    assert "法定代表人（单位负责人）身份证正反面复印件" in hints   # 法人 → 法定代表人框行
+    assert "信用信息查询" in hints and "insert_picture_after" in hints  # 无框 → 标题段后
+    assert "生产线.png → 无建议" in hints                 # 长尾交 agent 判断
 
 
 def test_fill_forms_picture_pass_failure_logged(tmp_path: Path, monkeypatch):

@@ -6,7 +6,7 @@ from docx import Document
 from biaoshu_gen.fill_skill import (
     dump_fill_points, fill_all_blanks, fill_blank_before_label, fill_cell,
     fill_label_blank, find_para, find_table, insert_picture_after,
-    replace_in_para, run_fill_plan,
+    insert_picture_into_frame, replace_in_para, run_fill_plan,
 )
 
 # 1x1 透明 PNG（构造插图用，无需 PIL）
@@ -120,6 +120,40 @@ def test_replace_and_cell_and_picture(tmp_path: Path):
     insert_picture_after(d, "项目名称：", str(img), caption="附：证照")
     assert len(d.inline_shapes) == 1
     assert any("附：证照" in p.text for p in d.paragraphs)
+
+
+def test_insert_picture_into_frame(tmp_path: Path):
+    """#89:证照粘贴框(单元格文字=「xxx复印件」的单列表)——图插进框内对应行,
+    行内标签保留;只认单列表(多列数据表同关键词不碰);重跑幂等;无匹配报错。"""
+    img = tmp_path / "id.png"
+    img.write_bytes(_PNG1)
+    d = Document()
+    d.add_paragraph("本授权书于      年    月    日签字生效，特此声明。")
+    frame = d.add_table(rows=2, cols=1)
+    frame.cell(0, 0).text = "代理人身份证正反面复印件"
+    frame.cell(1, 0).text = "法定代表人（单位负责人）身份证正反面复印件"
+    data = d.add_table(rows=2, cols=2)          # 多列数据表:同关键词也不该命中
+    data.cell(0, 0).text = "代理人身份证正反面复印件"     # 故意同名防误触
+
+    p = insert_picture_into_frame(d, "代理人", str(img))
+    cell = d.tables[0].rows[0].cells[0]
+    assert cell.paragraphs[-1]._p is p._p              # 图落在该行格内（元素级比对）
+    assert cell.paragraphs[0].text == "代理人身份证正反面复印件"   # 标签保留在图上
+    assert len(d.inline_shapes) == 1
+    assert d.tables[1].rows[0].cells[0].paragraphs[0].text \
+        == "代理人身份证正反面复印件"                   # 数据表未被插入图
+
+    insert_picture_into_frame(d, "代理人", str(img))   # 重跑幂等:已有图跳过
+    assert len(d.inline_shapes) == 1
+    insert_picture_into_frame(d, "法定代表人", str(img))
+    assert len(d.inline_shapes) == 2                    # 另一行照插
+
+    try:
+        insert_picture_into_frame(d, "护照", str(img))
+        raised = False
+    except RuntimeError as e:
+        raised = "护照" in str(e)                       # 报错带关键词便于自纠
+    assert raised
 
 
 def test_run_fill_plan_batch_and_errors(tmp_path: Path):

@@ -18,7 +18,8 @@ from docx import Document
 from ..business import ensure_business_fields
 from ..fill_context import (
     FIELD_SYNONYMS, PREFILL_NOTE, VALUE_PRIORITY, build_fill_context, fill_ws_subdir,
-    prefill_known, prefill_summary, resolve_template_src, run_with_extras,
+    picture_anchor_hints, prefill_known, prefill_summary, resolve_template_src,
+    run_with_extras,
 )
 from ..fill_skill import run_fill_plan
 from ..harness import HarnessTask, environment_notes, prepare_agent_workspace, run_harness_task
@@ -80,16 +81,20 @@ def _picture_pass(state: BidState, ws_key: str, out: Path) -> None:
     """插图 pass：fill 阶段 harness 的唯一任务（feedback #86 终版）——agent 对照
     产物实况自主决定哪些图片插入、插在哪段之后；不做任何其他填写。
 
-    工作区与程序化路径共用（prepare_agent_workspace 幂等投放 tender/scoring/kb/
-    fill_skill），地图基于**当前产物**。产物缺失校验天然满足（out 已存在）。
+    #89：粘贴框（复印件单列表）规则 + 常见证照的确定性预匹配清单（代码给锚点
+    建议，agent 核对执行、只兜清单外长尾）。工作区与程序化路径共用
+    （prepare_agent_workspace 幂等投放 tender/scoring/kb/fill_skill），地图基于
+    **当前产物**。产物缺失校验天然满足（out 已存在）。
     """
     run = run_dir(state)
     ws = prepare_agent_workspace(
         state, fill_ws_subdir("forms", ws_key),
         extra_inputs=[(run / "01_parse" / "scoring.yaml", "scoring.yaml")],
         template_src=resolve_template_src(state, "forms") or None)
+    prod = Document(str(out))                  # 产物只开一次：可填点地图与锚点预匹配共用
     prompt = (PICTURE_SYSTEM + "\n\n" + build_picture_prompt(str(out))
-              + "\n\n" + build_fill_context(state, tpl_doc=Document(str(out)))
+              + "\n\n" + build_fill_context(state, tpl_doc=prod)
+              + "\n\n" + picture_anchor_hints(state, prod)
               + "\n\n" + environment_notes())
     run_harness_task(HarnessTask(prompt=prompt, cwd=ws, expected_outputs=[out]))
 
